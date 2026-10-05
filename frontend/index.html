@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Central Data Hub</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20261005-3" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">DEMO · read-only central copy</p>
+        <h1>ศูนย์รวมข้อมูล</h1>
+      </div>
+      <p id="freshness">กำลังตรวจสถานะระบบ…</p>
+    </header>
+
+    <nav class="tabs" aria-label="หน้าหลัก">
+      <button class="tab active" data-view="explorer">Data Explorer</button>
+      <button class="tab" data-view="dashboard">Dashboard</button>
+      <button class="tab" data-view="catalog">Data Catalog</button>
+    </nav>
+
+    <main>
+      <section id="explorer" class="view active">
+        <div class="section-heading">
+          <div>
+            <h2>Data Explorer</h2>
+            <p>ค้นหาและกรองข้อมูลจากสำเนากลาง โดยทุกแถวย้อนกลับไปยังแหล่งข้อมูลได้</p>
+          </div>
+        </div>
+        <form id="search-form" class="filters">
+          <label>คำค้น<input id="query" name="q" placeholder="เลขทะเบียน, รายการ, ชนิด, อายุสมัย…" /></label>
+          <label>ชีตต้นทาง<select id="sheet-filter" name="source_sheet"><option value="">ทุกชีต</option></select></label>
+          <label>การตรวจสอบ<select id="check-filter" name="status_data_check"><option value="">ทุกสถานะ</option></select></label>
+          <label class="checkbox"><input id="description-filter" type="checkbox" /> มีรายละเอียดรายการ</label>
+          <button type="submit">ค้นหา</button>
+        </form>
+        <p id="result-summary" class="muted"></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>เลขทะเบียน</th><th>รายการ</th><th>ชนิด</th><th>อายุสมัย</th><th>ตรวจสอบ</th><th>แหล่งข้อมูล</th></tr></thead>
+            <tbody id="records-body"></tbody>
+          </table>
+        </div>
+        <div class="pagination"><button id="previous-page">ก่อนหน้า</button><span id="page-label"></span><button id="next-page">ถัดไป</button></div>
+      </section>
+
+      <section id="dashboard" class="view">
+        <div class="section-heading"><div><h2>Dashboard</h2><p>ตัวเลขจากข้อมูลที่นำเข้าแล้ว ไม่ใช่สถานะของ Google Sheets แบบ real-time</p></div></div>
+        <div id="metrics" class="metrics"></div>
+        <div class="chart-grid">
+          <article class="panel"><h3>จำนวนระเบียนตามชีต</h3><div id="chart-sheets"></div></article>
+          <article class="panel"><h3>การตรวจสอบข้อมูล</h3><div id="chart-check"></div></article>
+          <article class="panel"><h3>การถ่ายภาพ</h3><div id="chart-photo"></div></article>
+          <article class="panel"><h3>การลงระบบ Antique</h3><div id="chart-antique"></div></article>
+          <article class="panel"><h3>การส่งขึ้นห้องคลัง</h3><div id="chart-storage"></div></article>
+        </div>
+      </section>
+
+      <section id="catalog" class="view">
+        <div class="section-heading"><div><h2>Data Catalog</h2><p>แหล่งข้อมูล การซิงก์ล่าสุด และประเด็นคุณภาพข้อมูล</p></div></div>
+        <div id="catalog-list" class="catalog-list"></div>
+      </section>
+
+      <section id="detail" class="view">
+        <button class="back-link" data-back="explorer">← กลับไป Data Explorer</button>
+        <div id="detail-content"></div>
+      </section>
+    </main>
+    <script src="/assets/app.js?v=20261005-3"></script>
+  </body>
+</html>

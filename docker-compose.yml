@@ -1,0 +1,32 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: central_data_hub
+      POSTGRES_USER: central_data_hub
+      POSTGRES_PASSWORD: change-this-before-use
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U central_data_hub -d central_data_hub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  web:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://central_data_hub:change-this-before-use@db:5432/central_data_hub
+      APP_ENV: development
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+volumes:
+  postgres_data:
