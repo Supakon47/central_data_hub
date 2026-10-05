@@ -23,6 +23,31 @@ class DataSource(Base):
 
     records: Mapped[list["Record"]] = relationship(back_populates="source")
     sync_runs: Mapped[list["SyncRun"]] = relationship(back_populates="source")
+    sheet_configs: Mapped[list["SourceSheetConfig"]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+
+
+class SourceSheetConfig(Base):
+    """An approved tab in an external spreadsheet.
+
+    Keeping this allow-list in the central database means the sync command
+    cannot be pointed at arbitrary spreadsheets from a web request.
+    """
+
+    __tablename__ = "source_sheet_configs"
+    __table_args__ = (UniqueConstraint("source_id", "sheet_name", name="uq_source_sheet_config"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("data_sources.id"), index=True)
+    sheet_name: Mapped[str] = mapped_column(String(255))
+    read_range: Mapped[str] = mapped_column(String(255), default="A:ZZ")
+    header_row_number: Mapped[int] = mapped_column(Integer, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    source: Mapped["DataSource"] = relationship(back_populates="sheet_configs")
 
 
 class SyncRun(Base):
@@ -85,4 +110,19 @@ class DataQualityIssue(Base):
     code: Mapped[str] = mapped_column(String(100), index=True)
     message: Mapped[str] = mapped_column(Text)
     is_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuditLog(Base):
+    """Append-only record of central-copy edits made through the admin page."""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    action: Mapped[str] = mapped_column(String(30), index=True)
+    entity_type: Mapped[str] = mapped_column(String(50), index=True)
+    entity_id: Mapped[str] = mapped_column(String(100), index=True)
+    actor: Mapped[str] = mapped_column(String(100), default="local-admin")
+    before_data: Mapped[dict | None] = mapped_column(JSON)
+    after_data: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

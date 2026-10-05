@@ -4,4 +4,5 @@ SQLAlchemy>=2.0,<2.1
 psycopg[binary]>=3.2,<4.0
 openpyxl>=3.1,<4.0
 python-dotenv>=1.0,<2.0
-# Add google-api-python-client and google-auth when the read-only Google Sheets connector is enabled.
+google-api-python-client>=2.150,<3.0
+google-auth>=2.35,<3.0

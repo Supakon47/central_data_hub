@@ -4,12 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Central Data Hub</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20261005-3" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261005-5" />
   </head>
   <body>
     <header class="topbar">
       <div>
-        <p class="eyebrow">DEMO · read-only central copy</p>
+        <p class="eyebrow">DEMO · central data copy</p>
         <h1>ศูนย์รวมข้อมูล</h1>
       </div>
       <p id="freshness">กำลังตรวจสถานะระบบ…</p>
@@ -19,6 +19,7 @@
       <button class="tab active" data-view="explorer">Data Explorer</button>
       <button class="tab" data-view="dashboard">Dashboard</button>
       <button class="tab" data-view="catalog">Data Catalog</button>
+      <button class="tab" data-view="admin">จัดการข้อมูล</button>
     </nav>
 
     <main>
@@ -63,11 +64,30 @@
         <div id="catalog-list" class="catalog-list"></div>
       </section>
 
+      <section id="admin" class="view">
+        <div class="section-heading"><div><h2>จัดการข้อมูล</h2><p>เพิ่ม แก้ไข หรือลบข้อมูลในสำเนากลาง โดยต้องปลดล็อกด้วยรหัสผ่านผู้ดูแล</p></div></div>
+        <p id="admin-message" class="admin-message" role="status"></p>
+        <article id="admin-login" class="panel admin-login">
+          <h3>เข้าสู่หน้าจัดการ</h3>
+          <p class="muted">หน้าดูข้อมูลทั่วไปยังคงใช้ได้โดยไม่ต้องเข้าสู่ระบบ</p>
+          <form id="admin-login-form" class="inline-form"><label>รหัสผ่านผู้ดูแล<input id="admin-password" type="password" required autocomplete="current-password" /></label><button type="submit">ปลดล็อก</button></form>
+        </article>
+        <div id="admin-content" hidden>
+          <div class="admin-notice"><strong>ขอบเขตการแก้ไข:</strong> หน้านี้แก้เฉพาะสำเนาข้อมูลกลาง ไม่แก้ Excel หรือ Google Sheet ต้นทาง การ sync ในอนาคตอาจนำค่าที่ต้นทางเปลี่ยนแล้วกลับมาแทนที่ และการลบระเบียนจากแหล่งที่ sync อาจถูกนำเข้าใหม่ได้</div>
+          <div class="admin-toolbar"><button id="admin-new-record" type="button">+ เพิ่มระเบียนใหม่</button><form id="admin-search-form" class="inline-form"><label>ค้นหาเพื่อแก้ไข<input id="admin-query" placeholder="เลขทะเบียน, รายการ, ชนิด…" /></label><button type="submit">ค้นหา</button></form><button id="admin-logout" class="secondary" type="button">ออกจากหน้าจัดการ</button></div>
+          <div class="admin-grid">
+            <article class="panel admin-editor"><div id="admin-editor"></div></article>
+            <article class="panel"><h3>ประวัติการแก้ไขล่าสุด</h3><div id="audit-list" class="audit-list"></div></article>
+          </div>
+          <article class="panel admin-records"><h3>ระเบียนสำหรับจัดการ</h3><div class="table-wrap"><table><thead><tr><th>เลขทะเบียน</th><th>รายการ</th><th>แหล่งข้อมูล</th><th>การทำงาน</th></tr></thead><tbody id="admin-records-body"></tbody></table></div></article>
+        </div>
+      </section>
+
       <section id="detail" class="view">
         <button class="back-link" data-back="explorer">← กลับไป Data Explorer</button>
         <div id="detail-content"></div>
       </section>
     </main>
-    <script src="/assets/app.js?v=20261005-3"></script>
+    <script src="/assets/app.js?v=20261005-5"></script>
   </body>
 </html>

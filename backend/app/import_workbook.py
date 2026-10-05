@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Iterable
 
 import openpyxl
 from sqlalchemy import select
@@ -28,6 +30,20 @@ FIELD_ALIASES = {
     "status_antique": ("การลงระบบ Antique",),
     "status_storage": ("การส่งขึ้นห้องคลัง",),
 }
+
+
+@dataclass(frozen=True)
+class TabularSheet:
+    """A normalised view of one approved spreadsheet tab.
+
+    `rows` includes the header as its first row.  This keeps Excel and Google
+    Sheets on the same validation and idempotent-import path.
+    """
+
+    name: str
+    rows: Iterable[list[object] | tuple[object, ...]]
+    header_row_number: int = 1
+    source_url: str | None = None
 
 
 def first_value(row: list[object], indexes: dict[str, int], aliases: tuple[str, ...], multiline: bool = False):
@@ -63,6 +79,104 @@ def canonical_payload(row: list[object], headers: list[str]) -> tuple[dict, dict
     return payload, raw_data
 
 
+def sync_tabular_sheets(
+    session,
+    source: DataSource,
+    sheets: Iterable[TabularSheet],
+    run_message: str,
+) -> dict:
+    """Validate and upsert approved tabular data into one source.
+
+    The row identity is source + sheet + original row number.  Repeating an
+    unchanged sync only increments `skipped`; it does not create new records.
+    """
+    run = SyncRun(source_id=source.id, status="running")
+    session.add(run)
+    session.flush()
+    known_aliases = {alias for aliases in FIELD_ALIASES.values() for alias in aliases}
+
+    for sheet in sheets:
+        rows = iter(sheet.rows)
+        first_row = next(rows, None)
+        if first_row is None:
+            continue
+        headers = [normalise_header(value) for value in first_row]
+        if not set(headers).intersection(known_aliases):
+            run.error_count += 1
+            session.add(DataQualityIssue(
+                source_id=source.id,
+                source_sheet=sheet.name,
+                severity="error",
+                code="UNRECOGNISED_HEADERS",
+                message="ไม่พบหัวตารางที่ระบบรู้จัก จึงข้ามชีตนี้",
+            ))
+            continue
+
+        for row_number, values in enumerate(rows, start=sheet.header_row_number + 1):
+            row = list(values)
+            if not any(value not in (None, "") for value in row):
+                continue
+            run.rows_read += 1
+            payload, raw_data = canonical_payload(row, headers)
+            raw_json = json.dumps(raw_data, ensure_ascii=False, sort_keys=True)
+            raw_hash = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()
+            row_key = f"row-{row_number}"
+            record = session.scalar(select(Record).where(
+                Record.source_id == source.id,
+                Record.source_sheet == sheet.name,
+                Record.source_row_key == row_key,
+            ))
+            if record is not None and record.raw_hash == raw_hash:
+                run.rows_skipped += 1
+                continue
+            if record is None:
+                record = Record(
+                    source_id=source.id,
+                    source_sheet=sheet.name,
+                    source_row_number=row_number,
+                    source_row_key=row_key,
+                    source_url=sheet.source_url,
+                    raw_hash=raw_hash,
+                    raw_data=raw_data,
+                    **payload,
+                )
+                session.add(record)
+                session.flush()
+                run.rows_inserted += 1
+            else:
+                for field, value in payload.items():
+                    setattr(record, field, value)
+                record.source_row_number = row_number
+                record.source_url = sheet.source_url
+                record.raw_hash = raw_hash
+                record.raw_data = raw_data
+                run.rows_updated += 1
+
+            if not payload["registration_no"]:
+                run.error_count += 1
+                session.add(DataQualityIssue(
+                    source_id=source.id,
+                    record_id=record.id,
+                    source_sheet=sheet.name,
+                    source_row_number=row_number,
+                    severity="warning",
+                    code="MISSING_REGISTRATION_NO",
+                    message="แถวนี้ไม่มีเลขทะเบียน",
+                ))
+
+    run.status = "completed"
+    run.completed_at = datetime.now(timezone.utc)
+    run.message = run_message
+    return {
+        "run_id": run.id,
+        "rows_read": run.rows_read,
+        "inserted": run.rows_inserted,
+        "updated": run.rows_updated,
+        "skipped": run.rows_skipped,
+        "errors": run.error_count,
+    }
+
+
 def import_xlsx(path: str, source_name: str = "บัญชีเดินทุ่ง (ต้นแบบ)") -> dict:
     Base.metadata.create_all(bind=engine)
     workbook_path = Path(path).resolve()
@@ -85,90 +199,13 @@ def import_xlsx(path: str, source_name: str = "บัญชีเดินทุ
             session.add(source)
             session.flush()
 
-        run = SyncRun(source_id=source.id, status="running")
-        session.add(run)
-        session.flush()
-
-        for worksheet in workbook.worksheets:
-            rows = worksheet.iter_rows(values_only=True)
-            first_row = next(rows, None)
-            if first_row is None:
-                continue
-            headers = [normalise_header(value) for value in first_row]
-            known_headers = set(headers).intersection({alias for aliases in FIELD_ALIASES.values() for alias in aliases})
-            if not known_headers:
-                run.error_count += 1
-                session.add(DataQualityIssue(
-                    source_id=source.id,
-                    source_sheet=worksheet.title,
-                    severity="error",
-                    code="UNRECOGNISED_HEADERS",
-                    message="ไม่พบหัวตารางที่ระบบรู้จัก จึงข้ามชีตนี้",
-                ))
-                continue
-
-            for row_number, row in enumerate(rows, start=2):
-                if not any(value not in (None, "") for value in row):
-                    continue
-                run.rows_read += 1
-                payload, raw_data = canonical_payload(list(row), headers)
-                raw_json = json.dumps(raw_data, ensure_ascii=False, sort_keys=True)
-                raw_hash = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()
-                row_key = f"row-{row_number}"
-                record = session.scalar(select(Record).where(
-                    Record.source_id == source.id,
-                    Record.source_sheet == worksheet.title,
-                    Record.source_row_key == row_key,
-                ))
-                if record is not None and record.raw_hash == raw_hash:
-                    run.rows_skipped += 1
-                    continue
-                if record is None:
-                    record = Record(
-                        source_id=source.id,
-                        source_sheet=worksheet.title,
-                        source_row_number=row_number,
-                        source_row_key=row_key,
-                        source_url=None,
-                        raw_hash=raw_hash,
-                        raw_data=raw_data,
-                        **payload,
-                    )
-                    session.add(record)
-                    session.flush()
-                    run.rows_inserted += 1
-                else:
-                    for field, value in payload.items():
-                        setattr(record, field, value)
-                    record.source_row_number = row_number
-                    record.raw_hash = raw_hash
-                    record.raw_data = raw_data
-                    run.rows_updated += 1
-
-                if not payload["registration_no"]:
-                    run.error_count += 1
-                    session.add(DataQualityIssue(
-                        source_id=source.id,
-                        record_id=record.id,
-                        source_sheet=worksheet.title,
-                        source_row_number=row_number,
-                        severity="warning",
-                        code="MISSING_REGISTRATION_NO",
-                        message="แถวนี้ไม่มีเลขทะเบียน",
-                    ))
-
-        run.status = "completed"
-        run.completed_at = datetime.now(timezone.utc)
-        run.message = f"Imported from {workbook_path.name}"
+        sheets = [
+            TabularSheet(name=worksheet.title, rows=worksheet.iter_rows(values_only=True))
+            for worksheet in workbook.worksheets
+        ]
+        result = sync_tabular_sheets(session, source, sheets, f"Imported from {workbook_path.name}")
         session.commit()
-        return {
-            "run_id": run.id,
-            "rows_read": run.rows_read,
-            "inserted": run.rows_inserted,
-            "updated": run.rows_updated,
-            "skipped": run.rows_skipped,
-            "errors": run.error_count,
-        }
+        return result
     except Exception as error:
         session.rollback()
         raise RuntimeError(f"การนำเข้าล้มเหลว: {error}") from error
