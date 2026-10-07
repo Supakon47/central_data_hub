@@ -5,13 +5,15 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable
 
 import openpyxl
 from sqlalchemy import select
 
 from .database import Base, SessionLocal, engine
+from .config import IMAGE_STORAGE_DIR
+from .embedded_images import extract_embedded_images
 from .models import DataQualityIssue, DataSource, Record, SyncRun
 from .normalization import clean_multiline_text, clean_text, normalise_header, normalise_image_url
 
@@ -44,6 +46,8 @@ class TabularSheet:
     rows: Iterable[list[object] | tuple[object, ...]]
     header_row_number: int = 1
     source_url: str | None = None
+    embedded_image_urls_by_row: dict[int, str] = field(default_factory=dict)
+    duplicate_embedded_image_rows: set[int] = field(default_factory=set)
 
 
 def first_value(row: list[object], indexes: dict[str, int], aliases: tuple[str, ...], multiline: bool = False):
@@ -118,6 +122,10 @@ def sync_tabular_sheets(
                 continue
             run.rows_read += 1
             payload, raw_data = canonical_payload(row, headers)
+            embedded_image_url = sheet.embedded_image_urls_by_row.get(row_number)
+            if embedded_image_url:
+                payload["image_url"] = embedded_image_url
+                raw_data["_embedded_image_url"] = embedded_image_url
             raw_json = json.dumps(raw_data, ensure_ascii=False, sort_keys=True)
             raw_hash = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()
             row_key = f"row-{row_number}"
@@ -128,6 +136,17 @@ def sync_tabular_sheets(
             ))
             if record is not None and record.raw_hash == raw_hash:
                 run.rows_skipped += 1
+                if row_number in sheet.duplicate_embedded_image_rows:
+                    run.error_count += 1
+                    session.add(DataQualityIssue(
+                        source_id=source.id,
+                        record_id=record.id,
+                        source_sheet=sheet.name,
+                        source_row_number=row_number,
+                        severity="warning",
+                        code="MULTIPLE_EMBEDDED_IMAGES",
+                        message="พบรูปภาพฝังมากกว่า 1 รูปในช่องรูปภาพ จึงไม่จับคู่รูปอัตโนมัติ",
+                    ))
                 continue
             if record is None:
                 record = Record(
@@ -162,6 +181,17 @@ def sync_tabular_sheets(
                     severity="warning",
                     code="MISSING_REGISTRATION_NO",
                     message="แถวนี้ไม่มีเลขทะเบียน",
+                ))
+            if row_number in sheet.duplicate_embedded_image_rows:
+                run.error_count += 1
+                session.add(DataQualityIssue(
+                    source_id=source.id,
+                    record_id=record.id,
+                    source_sheet=sheet.name,
+                    source_row_number=row_number,
+                    severity="warning",
+                    code="MULTIPLE_EMBEDDED_IMAGES",
+                    message="พบรูปภาพฝังมากกว่า 1 รูปในช่องรูปภาพ จึงไม่จับคู่รูปอัตโนมัติ",
                 ))
 
     run.status = "completed"
@@ -199,11 +229,33 @@ def import_xlsx(path: str, source_name: str = "บัญชีเดินทุ
             session.add(source)
             session.flush()
 
+        photo_columns_by_sheet = {}
+        for worksheet in workbook.worksheets:
+            header_row = next(worksheet.iter_rows(values_only=True), None) or ()
+            for index, value in enumerate(header_row):
+                if normalise_header(value) == "รูปภาพ":
+                    photo_columns_by_sheet[worksheet.title] = index
+                    break
+        embedded_images = extract_embedded_images(
+            workbook_path, source_name, photo_columns_by_sheet, IMAGE_STORAGE_DIR
+        )
         sheets = [
-            TabularSheet(name=worksheet.title, rows=worksheet.iter_rows(values_only=True))
+            TabularSheet(
+                name=worksheet.title,
+                rows=worksheet.iter_rows(values_only=True),
+                embedded_image_urls_by_row=embedded_images.urls_by_sheet_row.get(worksheet.title, {}),
+                duplicate_embedded_image_rows=embedded_images.duplicate_rows_by_sheet.get(worksheet.title, set()),
+            )
             for worksheet in workbook.worksheets
         ]
-        result = sync_tabular_sheets(session, source, sheets, f"Imported from {workbook_path.name}")
+        result = sync_tabular_sheets(
+            session,
+            source,
+            sheets,
+            f"Imported from {workbook_path.name}; embedded images exported: {embedded_images.exported_count}; ambiguous rows: {sum(len(rows) for rows in embedded_images.duplicate_rows_by_sheet.values())}",
+        )
+        result["embedded_images_exported"] = embedded_images.exported_count
+        result["embedded_images_ambiguous"] = sum(len(rows) for rows in embedded_images.duplicate_rows_by_sheet.values())
         session.commit()
         return result
     except Exception as error:

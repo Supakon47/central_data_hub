@@ -13,6 +13,8 @@ APP_NAME = os.getenv("APP_NAME", "Central Data Hub")
 PAGE_SIZE_DEFAULT = int(os.getenv("PAGE_SIZE_DEFAULT", "25"))
 PAGE_SIZE_MAX = int(os.getenv("PAGE_SIZE_MAX", "100"))
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+IMAGE_STORAGE_DIR = Path(os.getenv("IMAGE_STORAGE_DIR", str(PROJECT_ROOT / "data" / "images")))
+IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def env_flag(name: str, default: bool = False) -> bool:

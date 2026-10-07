@@ -13,7 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .admin_security import admin_access_configured, create_session_token, valid_session_token, verify_password
-from .config import APP_ENV, APP_NAME, FRONTEND_DIR, PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX, ADMIN_SESSION_TTL_SECONDS
+from .config import APP_ENV, APP_NAME, FRONTEND_DIR, IMAGE_STORAGE_DIR, PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX, ADMIN_SESSION_TTL_SECONDS
 from .database import Base, engine, get_session
 from .models import AuditLog, DataQualityIssue, DataSource, Record, SourceSheetConfig, SyncRun
 from .normalization import clean_multiline_text, clean_text, normalise_image_url
@@ -21,6 +21,7 @@ from .normalization import clean_multiline_text, clean_text, normalise_image_url
 
 app = FastAPI(title=APP_NAME, version="0.1.0")
 app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
+app.mount("/media", StaticFiles(directory=IMAGE_STORAGE_DIR), name="media")
 
 
 EDITABLE_RECORD_FIELDS = (

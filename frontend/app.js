@@ -55,7 +55,8 @@ async function loadRecords() {
 }
 function renderBars(target, items) {
   const max = Math.max(...items.map((item) => item.count), 1);
-  $(target).innerHTML = items.map((item) => `<div class="bar-row"><span class="bar-label" title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</span><span class="bar-track"><span class="bar-fill" style="width:${item.count / max * 100}%"></span></span><strong>${item.count.toLocaleString()}</strong></div>`).join("") || `<p class="muted">ยังไม่มีข้อมูล</p>`;
+  $(target).innerHTML = items.map((item) => 
+    `<div class="bar-row"><span class="bar-label" title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</span><span class="bar-track"><span class="bar-fill" style="width:${item.count / max * 100}%"></span></span><strong>${item.count.toLocaleString()}</strong></div>`).join("") || `<p class="muted">ยังไม่มีข้อมูล</p>`;
 }
 async function loadDashboard() {
   const data = await (await fetch("/api/dashboard")).json();
@@ -65,7 +66,11 @@ async function loadDashboard() {
 }
 async function loadCatalog() {
   const data = await (await fetch("/api/catalog")).json();
-  $("#catalog-list").innerHTML = data.sources.map((source) => { const sync = source.last_sync; const sheets = (source.configured_sheets || []).filter((sheet) => sheet.is_active).map((sheet) => escapeHtml(sheet.name)).join(", "); return `<article class="catalog-item"><h3>${escapeHtml(source.name)}</h3><p class="muted">${compact(source.description, "ไม่มีคำอธิบาย")}</p><div class="catalog-meta"><span>ประเภท: ${escapeHtml(source.connection_type)}</span><span>ชั้นข้อมูล: ${escapeHtml(source.classification)}</span><span>ชีตที่เชื่อม: ${sheets || "-"}</span><span>ระเบียน: ${source.record_count.toLocaleString()}</span><span class="issue">ประเด็นที่ยังไม่ปิด: ${source.unresolved_issues.toLocaleString()}</span><span>sync ล่าสุด: ${sync ? escapeHtml(sync.completed_at || sync.started_at) : "ยังไม่เคย"}</span></div></article>`; }).join("") || `<p class="muted">ยังไม่มีแหล่งข้อมูล</p>`;
+  $("#catalog-list").innerHTML = data.sources.map((source) => 
+    { const sync = source.last_sync; 
+      const sheets = (source.configured_sheets || []).filter((sheet) => sheet.is_active).map((sheet) => escapeHtml(sheet.name)).join(", "); 
+      return `<article class="catalog-item"><h3>${escapeHtml(source.name)}</h3><p class="muted">${compact(source.description, "ไม่มีคำอธิบาย")}</p>
+              <div class="catalog-meta"><span>ประเภท: ${escapeHtml(source.connection_type)}</span><span>ชั้นข้อมูล: ${escapeHtml(source.classification)}</span><span>ชีตที่เชื่อม: ${sheets || "-"}</span><span>ระเบียน: ${source.record_count.toLocaleString()}</span><span class="issue">ประเด็นที่ยังไม่ปิด: ${source.unresolved_issues.toLocaleString()}</span><span>sync ล่าสุด: ${sync ? escapeHtml(sync.completed_at || sync.started_at) : "ยังไม่เคย"}</span></div></article>`; }).join("") || `<p class="muted">ยังไม่มีแหล่งข้อมูล</p>`;
 }
 const ADMIN_FIELDS = [
   ["registration_no", "เลขทะเบียน", "text"], ["previous_registration_no", "เลขทะเบียนเดิม", "text"],
