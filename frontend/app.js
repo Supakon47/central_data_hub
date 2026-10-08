@@ -1,4 +1,4 @@
-const BUILD_VERSION = "2026.10.05.5";
+const BUILD_VERSION = "2026.10.08.1";
 const state = { page: 1, pageSize: 25, total: 0, lastItems: [], currentDetailId: null };
 const $ = (selector) => document.querySelector(selector);
 
@@ -60,9 +60,23 @@ function renderBars(target, items) {
 }
 async function loadDashboard() {
   const data = await (await fetch("/api/dashboard")).json();
-  const metrics = [["ระเบียนทั้งหมด", data.total_records], ["มีเลขทะเบียน", data.with_registration_no], ["มีรายละเอียดรายการ", data.with_description], ["มีลิงก์รูปภาพ", data.with_image_url]];
-  $("#metrics").innerHTML = metrics.map(([label, value]) => `<article class="metric"><span class="label">${label}</span><span class="number">${value.toLocaleString()}</span></article>`).join("");
+  const metrics = [["ระเบียนทั้งหมด", data.total_records], ["มีเลขทะเบียน", data.with_registration_no], ["มีรายละเอียดรายการ", data.with_description], ["มีลิงก์รูปภาพ", data.with_image_url], ["ทะเบียนที่ซ้ำทั้งหมด", data.duplicate_registration_groups]];
+  $("#metrics").innerHTML = metrics.map(([label, value]) => label === "ทะเบียนที่ซ้ำทั้งหมด" ? `<button id="toggle-duplicates" class="metric metric-button" type="button" aria-expanded="false"><span class="label">${label}</span><span class="number">${value.toLocaleString()}</span><span class="metric-action">กดเพื่อดูรายการที่ซ้ำ</span></button>` : `<article class="metric"><span class="label">${label}</span><span class="number">${value.toLocaleString()}</span></article>`).join("");
   renderBars("#chart-sheets", data.by_source_sheet); renderBars("#chart-check", data.by_data_check); renderBars("#chart-photo", data.by_photo); renderBars("#chart-antique", data.by_antique); renderBars("#chart-storage", data.by_storage);
+  $("#duplicate-panel").hidden = true;
+  $("#toggle-duplicates").addEventListener("click", toggleDuplicateGroups);
+}
+async function loadDuplicateGroups() {
+  $("#duplicate-groups").innerHTML = `<p class="muted">กำลังค้นหารายการที่ซ้ำ…</p>`;
+  const duplicates = await (await fetch("/api/duplicates?limit=50")).json();
+  const duplicateCaption = duplicates.total_groups > duplicates.groups.length ? `<p class="muted">แสดง ${duplicates.groups.length.toLocaleString()} จาก ${duplicates.total_groups.toLocaleString()} กลุ่ม</p>` : "";
+  $("#duplicate-groups").innerHTML = duplicates.groups.length ? `${duplicateCaption}<div class="table-wrap"><table class="duplicate-table"><thead><tr><th>เลขทะเบียน</th><th>จำนวน</th><th>ระเบียนที่ต้องตรวจสอบ</th></tr></thead><tbody>${duplicates.groups.map((group) => `<tr><td>${escapeHtml(group.registration_no)}</td><td>${group.count.toLocaleString()}</td><td>${group.records.map((record) => `<button class="record-link" data-record-id="${record.id}">${compact(record.registration_no)}</button><span class="muted"> — ${escapeHtml(record.source_sheet)} / แถว ${record.source_row_number}</span>`).join("<br>")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">ไม่พบเลขทะเบียนที่ซ้ำกัน</p>`;
+  document.querySelectorAll("#duplicate-groups [data-record-id]").forEach((button) => button.addEventListener("click", () => navigate("detail", button.dataset.recordId)));
+}
+async function toggleDuplicateGroups() {
+  const panel = $("#duplicate-panel"); const button = $("#toggle-duplicates"); const opening = panel.hidden;
+  panel.hidden = !opening; button.setAttribute("aria-expanded", String(opening));
+  if (opening) { await loadDuplicateGroups(); panel.scrollIntoView({ behavior: "smooth", block: "start" }); }
 }
 async function loadCatalog() {
   const data = await (await fetch("/api/catalog")).json();

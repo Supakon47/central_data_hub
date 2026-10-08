@@ -137,6 +137,7 @@ def record_summary(record: Record) -> dict:
         "source_id": record.source_id,
         "source_name": record.source.name if record.source else None,
         "source_sheet": record.source_sheet,
+        "source_row_number": record.source_row_number,
         "updated_at": record.updated_at,
     }
 
@@ -222,6 +223,10 @@ def dashboard(session: Annotated[Session, Depends(get_session)], source_id: int 
     if source_id:
         statement = statement.where(Record.source_id == source_id)
     records = session.scalars(statement).all()
+    registration_counts = Counter(record.registration_no for record in records if record.registration_no)
+    duplicate_registration_counts = {
+        registration_no: count for registration_no, count in registration_counts.items() if count > 1
+    }
 
     def counter(field: str) -> list[dict]:
         counts = Counter(getattr(record, field) or "ไม่ระบุ" for record in records)
@@ -232,11 +237,49 @@ def dashboard(session: Annotated[Session, Depends(get_session)], source_id: int 
         "with_registration_no": sum(bool(record.registration_no) for record in records),
         "with_description": sum(bool(record.title_description) for record in records),
         "with_image_url": sum(bool(record.image_url) for record in records),
+        "duplicate_registration_groups": len(duplicate_registration_counts),
+        "records_in_duplicate_registration_groups": sum(duplicate_registration_counts.values()),
         "by_source_sheet": counter("source_sheet"),
         "by_data_check": counter("status_data_check"),
         "by_photo": counter("status_photographed"),
         "by_antique": counter("status_antique"),
         "by_storage": counter("status_storage"),
+    }
+
+
+@app.get("/api/duplicates")
+def duplicate_registration_groups(
+    session: Annotated[Session, Depends(get_session)],
+    source_id: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Return exact duplicate registration numbers for staff review, not automatic merging."""
+    grouped_statement = select(Record.registration_no, func.count(Record.id).label("record_count")).where(
+        Record.registration_no.is_not(None),
+        Record.registration_no != "",
+    )
+    if source_id:
+        grouped_statement = grouped_statement.where(Record.source_id == source_id)
+    grouped_statement = grouped_statement.group_by(Record.registration_no).having(func.count(Record.id) > 1)
+    total_groups = session.scalar(select(func.count()).select_from(grouped_statement.subquery())) or 0
+    grouped = session.execute(
+        grouped_statement.order_by(func.count(Record.id).desc(), Record.registration_no).limit(limit)
+    ).all()
+    registration_numbers = [row.registration_no for row in grouped]
+    records_by_registration: dict[str, list[Record]] = {registration_no: [] for registration_no in registration_numbers}
+    if registration_numbers:
+        record_statement = select(Record).join(Record.source).where(Record.registration_no.in_(registration_numbers))
+        if source_id:
+            record_statement = record_statement.where(Record.source_id == source_id)
+        for record in session.scalars(record_statement.order_by(Record.registration_no, Record.source_sheet, Record.source_row_number)).all():
+            records_by_registration[record.registration_no].append(record)
+    return {
+        "total_groups": total_groups,
+        "groups": [{
+            "registration_no": row.registration_no,
+            "count": row.record_count,
+            "records": [record_summary(record) for record in records_by_registration[row.registration_no]],
+        } for row in grouped],
     }
 
 
