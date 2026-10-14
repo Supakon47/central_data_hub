@@ -91,7 +91,7 @@ if __name__ == "__main__":
     parser.add_argument("--sheet", required=True, dest="sheet_name")
     parser.add_argument("--read-range", default="A:ZZ")
     parser.add_argument("--header-row", type=int, default=1, dest="header_row_number")
-    parser.add_argument("--owner")
+    parser.add_argument("--owner", dest="owner_name")
     parser.add_argument("--description")
     parser.add_argument("--classification", default="internal")
     parser.add_argument("--sync-frequency-minutes", type=int)

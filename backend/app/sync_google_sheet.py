@@ -7,9 +7,9 @@ from sqlalchemy import select
 
 from .database import Base, SessionLocal, engine
 from .google_sheets import GoogleSheetSource, fetch_values
-from .import_workbook import FIELD_ALIASES, TabularSheet, sync_tabular_sheets
+from .import_workbook import FIELD_ALIASES, STABLE_ROW_ID_ALIASES, TabularSheet, sync_tabular_sheets
 from .models import DataSource, SourceSheetConfig
-from .normalization import normalise_header
+from .normalization import clean_text, normalise_header
 
 
 def _preview(sheets: list[TabularSheet]) -> dict:
@@ -18,11 +18,21 @@ def _preview(sheets: list[TabularSheet]) -> dict:
     for sheet in sheets:
         values = list(sheet.rows)
         headers = [normalise_header(value) for value in values[0]] if values else []
+        stable_id_index = next((headers.index(alias) for alias in STABLE_ROW_ID_ALIASES if alias in headers), None)
+        stable_ids = [
+            clean_text(row[stable_id_index]) if stable_id_index is not None and stable_id_index < len(row) else None
+            for row in values[1:]
+        ]
+        non_empty_stable_ids = [stable_id for stable_id in stable_ids if stable_id]
         tabs.append({
             "sheet": sheet.name,
             "rows_received": max(len(values) - 1, 0),
             "recognised_headers": sorted(set(headers).intersection(known_aliases)),
             "ready_to_import": bool(set(headers).intersection(known_aliases)),
+            "stable_id_header": headers[stable_id_index] if stable_id_index is not None else None,
+            "rows_with_stable_id": len(non_empty_stable_ids),
+            "rows_missing_stable_id": max(len(values) - 1 - len(non_empty_stable_ids), 0),
+            "duplicate_stable_ids": len(non_empty_stable_ids) - len(set(non_empty_stable_ids)),
         })
     return {"dry_run": True, "sheets": tabs}
 
@@ -59,7 +69,13 @@ def sync_google_source(source_name: str, dry_run: bool = False) -> dict:
         if dry_run:
             return _preview(sheets)
 
-        result = sync_tabular_sheets(session, source, sheets, "Synced from approved Google Sheets source")
+        result = sync_tabular_sheets(
+            session,
+            source,
+            sheets,
+            "Synced from approved Google Sheets source",
+            reconcile_missing=True,
+        )
         session.commit()
         return result
     except Exception:

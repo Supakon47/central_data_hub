@@ -1,0 +1,10 @@
+# Copy this file to docker-compose.google-sheets.yml (it is gitignored).
+# Keep GOOGLE_SERVICE_ACCOUNT_HOST_FILE only in your local .env; never commit it.
+services:
+  web:
+    environment:
+      GOOGLE_SHEETS_ENABLED: "true"
+      GOOGLE_SHEETS_WEB_SYNC_ENABLED: "true"
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+    volumes:
+      - ${GOOGLE_SERVICE_ACCOUNT_HOST_FILE:?Set GOOGLE_SERVICE_ACCOUNT_HOST_FILE in .env}:/run/secrets/google-service-account.json:ro

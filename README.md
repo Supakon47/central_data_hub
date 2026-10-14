@@ -204,7 +204,7 @@ central-data-hub/
 - ระบบเก็บแถวข้อมูลตาม `source / sheet / row` เพื่อรักษาที่มา
 - เลขทะเบียนซ้ำจะถูกแสดงเป็น candidate สำหรับตรวจสอบ ไม่ถูก merge อัตโนมัติ
 - Google Sheets connector อ่านข้อมูลผ่าน Google Sheets API แบบ **read-only** เท่านั้น และต้องมีแหล่งข้อมูลใน Data Catalog ก่อนจึงจะสั่ง sync ได้
-- MVP รองรับหัวตารางที่แถวแรกของ range (`A:ZZ`) และใช้ลำดับแถวเป็น identity ของแหล่งข้อมูล; อย่าย้ายแถวจำนวนมากโดยไม่ sync/ตรวจสอบผล
+- MVP รองรับหัวตารางที่แถวแรกของ range (`A:ZZ`) โดยแนะนำให้มีคอลัมน์ `record_id` ที่คงที่สำหรับแต่ละรายการ เพื่อรองรับการย้ายหรือเรียงแถวโดยข้อมูลไม่สลับกัน
 - ยังไม่มีระบบ login, SSO, RBAC หรือ audit retention ที่เพียงพอสำหรับ production
 
 ## Google Sheets read-only sync (Pilot)
@@ -241,7 +241,51 @@ docker compose run --rm -v "C:\safe\google-service-account.json:/run/secrets/goo
 docker compose run --rm -v "C:\safe\google-service-account.json:/run/secrets/google-service-account.json:ro" -e GOOGLE_SHEETS_ENABLED=true -e GOOGLE_SERVICE_ACCOUNT_FILE=/run/secrets/google-service-account.json web python -m app.sync_google_sheet --source-name "ทะเบียนโบราณวัตถุ ฝ่ายตัวอย่าง"
 ```
 
-ยังไม่มี scheduled sync อัตโนมัติใน MVP เพื่อให้เริ่มจากการตรวจผลด้วยเจ้าหน้าที่ก่อน
+### สั่ง Sync จากหน้าเว็บ (เฉพาะผู้ดูแล)
+
+หลังทดสอบด้วยคำสั่งจนถูกต้องแล้ว สามารถเปิดปุ่ม `Sync ข้อมูลล่าสุด` ในหน้า **Data Catalog** ได้ โดยปุ่มจะปรากฏเฉพาะเมื่อเข้าสู่หน้าจัดการข้อมูลด้วยรหัสผ่านแล้ว และทำงานกับ Google Sheets ที่ลงทะเบียนไว้เท่านั้น
+
+1. คัดลอกไฟล์ตั้งค่าตัวอย่างเป็นไฟล์เฉพาะในเครื่อง (ไฟล์ใหม่นี้ถูก ignore โดย Git):
+
+```powershell
+Copy-Item docker-compose.google-sheets.yml.example docker-compose.google-sheets.yml
+```
+
+2. เปิด `.env` แล้วใส่พาธ **ไฟล์ JSON จริง** ในเครื่องของคุณ (ไม่ใช่โฟลเดอร์) เช่น:
+
+```dotenv
+GOOGLE_SERVICE_ACCOUNT_HOST_FILE=C:\safe\google-service-account.json
+```
+
+3. เปิดระบบโดยรวมไฟล์ตั้งค่า Google Sheets แล้วเปิดหน้าเว็บใหม่:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.google-sheets.yml up -d --build --force-recreate
+```
+
+4. เข้าสู่แท็บ **จัดการข้อมูล** เพื่อปลดล็อกด้วยรหัสผู้ดูแล แล้วไปที่ **Data Catalog** กด `Sync ข้อมูลล่าสุด` ที่แหล่งข้อมูล Google Sheets ที่ต้องการ ระบบจะแสดงผลจำนวนแถวที่อ่าน/เพิ่ม/อัปเดต/ข้าม และบันทึกเหตุการณ์ `sync` ในประวัติผู้ดูแล
+
+ระบบจะอ่านข้อมูลแบบ read-only และไม่แก้ไข Google Sheets ต้นทาง เมื่อ sync สำเร็จ ระบบจะทำให้สำเนากลางตรงกับทุกแท็บที่ได้รับอนุมัติ: ระเบียนที่ถูกลบออกจาก Google Sheets จะถูกลบจากสำเนากลางของแท็บนั้นด้วย แต่จะไม่แตะข้อมูลจาก Excel หรือระเบียนที่เจ้าหน้าที่สร้างเอง ทั้งนี้ยังไม่มี scheduled sync อัตโนมัติใน MVP เพื่อให้เจ้าหน้าที่ตรวจผลก่อนทุกครั้ง
+
+### เพิ่มแหล่งข้อมูลหรือแท็บจากหน้าเว็บ
+
+หลังผู้ดูแลตั้งค่า service account ในเครื่อง/server แล้ว ให้เปิดแท็บ **จัดการข้อมูล** และเปิดหัวข้อ **จัดการแหล่งข้อมูล Google Sheets** เพื่อ:
+
+1. กรอกชื่อแหล่งข้อมูล, Spreadsheet ID, ชื่อแท็บ และช่วงข้อมูล (ปกติ `A:ZZ`)
+2. กด `บันทึกแหล่งข้อมูล / เพิ่มแท็บ` — การกระทำนี้เพียงเพิ่ม allow-list ยังไม่อ่านหรือแก้ไขข้อมูล
+3. กด `ตรวจสอบก่อน Sync` เพื่อดูจำนวนแถว, หัวตารางที่ระบบรู้จัก และสถานะ `record_id`
+4. เมื่อผลถูกต้อง จึงไปกด `Sync ข้อมูลล่าสุด` ใน **Data Catalog**
+
+หน้าเว็บนี้ไม่รับ, แสดง หรือบันทึก private key. ชื่อแหล่งข้อมูลหนึ่งชื่อผูกกับ Spreadsheet ID เดียว เพื่อป้องกันการเพิ่มแท็บผิดไฟล์โดยไม่ตั้งใจ
+
+### ป้องกันข้อมูลสลับเมื่อย้ายหรือเรียงแถว
+
+สำหรับ Google Sheets ที่เจ้าหน้าที่อาจย้ายหรือเรียงแถว ให้เพิ่มคอลัมน์หัวข้อ `record_id` ในทุกแท็บ แล้วกำหนดรหัสที่ไม่ซ้ำและ **ห้ามเปลี่ยน** ให้ทุกรายการ เช่น `ARC-64-000001`, `ARC-64-000002` ระบบจะใช้ค่านี้ตามระเบียนเดิม แม้ตำแหน่งแถวเปลี่ยนไป
+
+- `record_id` เป็นรหัสเทคนิคสำหรับการ sync ไม่ใช่เลขทะเบียนโบราณวัตถุ จึงไม่ต้องแสดงต่อผู้ใช้ทั่วไป
+- กำหนดให้ครบทุกแถวและใช้ค่าไม่ซ้ำกันในแท็บเดียวกัน; หากซ้ำ ระบบจะข้ามแถวที่ซ้ำและบันทึกประเด็นคุณภาพข้อมูล
+- อย่าใช้สูตรที่อิงเลขแถว เช่น `ROW()` เพราะค่าอาจเปลี่ยนเมื่อเรียงข้อมูล ควรสร้างรหัสหนึ่งครั้งแล้ววางเป็นค่า (Paste values)
+- ชีตเดิมที่ยังไม่มี `record_id` ยัง sync ได้ แต่จะกลับไปอ้างอิงตำแหน่งแถวตามเดิม
 
 ## ความปลอดภัย
 
@@ -254,9 +298,11 @@ docker compose run --rm -v "C:\safe\google-service-account.json:/run/secrets/goo
 ## Roadmap
 
 - [x] Google Sheets read-only sync service พร้อม dry-run และ allow-list ของชีต
+- [x] ปุ่ม sync แบบ manual สำหรับผู้ดูแล พร้อม audit log
 - [x] Password-protected admin page สำหรับแก้ไขสำเนากลาง พร้อม audit log
 - [ ] Scheduled sync พร้อม monitoring และ notification
-- [ ] หน้าเพิ่ม/แก้ไข Data Source และ Field Mapping สำหรับผู้ดูแล
+- [x] หน้าเพิ่ม Google Sheets source/แท็บที่อนุมัติ และตรวจสอบก่อน sync สำหรับผู้ดูแล
+- [ ] หน้าแก้ไข Data Source และ Field Mapping สำหรับผู้ดูแล
 - [ ] User authentication, SSO และ RBAC
 - [ ] Data-quality workflow และการจัดการ duplicate candidates
 - [ ] Export ที่ควบคุมสิทธิ์

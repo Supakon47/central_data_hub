@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Central Data Hub</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20261008-2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261014-4" />
   </head>
   <body>
     <header class="topbar">
@@ -62,6 +62,7 @@
 
       <section id="catalog" class="view">
         <div class="section-heading"><div><h2>Data Catalog</h2><p>แหล่งข้อมูล การซิงก์ล่าสุด และประเด็นคุณภาพข้อมูล</p></div></div>
+        <p id="catalog-message" class="catalog-message" role="status"></p>
         <div id="catalog-list" class="catalog-list"></div>
       </section>
 
@@ -75,12 +76,41 @@
         </article>
         <div id="admin-content" hidden>
           <div class="admin-notice"><strong>ขอบเขตการแก้ไข:</strong> หน้านี้แก้เฉพาะสำเนาข้อมูลกลาง ไม่แก้ Excel หรือ Google Sheet ต้นทาง การ sync ในอนาคตอาจนำค่าที่ต้นทางเปลี่ยนแล้วกลับมาแทนที่ และการลบระเบียนจากแหล่งที่ sync อาจถูกนำเข้าใหม่ได้</div>
-          <div class="admin-toolbar"><button id="admin-new-record" type="button">+ เพิ่มระเบียนใหม่</button><form id="admin-search-form" class="inline-form"><label>ค้นหาเพื่อแก้ไข<input id="admin-query" placeholder="เลขทะเบียน, รายการ, ชนิด…" /></label><button type="submit">ค้นหา</button></form><button id="admin-logout" class="secondary" type="button">ออกจากหน้าจัดการ</button></div>
+          <div class="admin-toolbar"><button id="admin-new-record" type="button">+ เพิ่มระเบียนใหม่</button><button id="admin-logout" class="secondary" type="button">ออกจากหน้าจัดการ</button></div>
           <div class="admin-grid">
             <article class="panel admin-editor"><div id="admin-editor"></div></article>
             <article class="panel"><h3>ประวัติการแก้ไขล่าสุด</h3><div id="audit-list" class="audit-list"></div></article>
           </div>
-          <article class="panel admin-records"><h3>ระเบียนสำหรับจัดการ</h3><div class="table-wrap"><table><thead><tr><th>เลขทะเบียน</th><th>รายการ</th><th>แหล่งข้อมูล</th><th>การทำงาน</th></tr></thead><tbody id="admin-records-body"></tbody></table></div></article>
+          <details id="admin-google-sources-panel" class="panel admin-records">
+            <summary><span><strong>จัดการแหล่งข้อมูล Google Sheets</strong><span class="muted">เพิ่มไฟล์ เพิ่มแท็บ และตรวจสอบก่อน sync</span></span></summary>
+            <div class="admin-records-content">
+              <p class="muted">กรอกเฉพาะ Spreadsheet ID และชื่อแท็บที่เจ้าของข้อมูลอนุมัติแล้ว ระบบไม่รับหรือแสดง private key</p>
+              <p id="admin-google-source-message" class="admin-message" role="status"></p>
+              <form id="admin-google-source-form" class="form-grid admin-form">
+                <label>ชื่อแหล่งข้อมูล<input name="source_name" required placeholder="เช่น ทะเบียนโบราณวัตถุ ฝ่ายตัวอย่าง" /></label>
+                <label>Spreadsheet ID<input name="spreadsheet_id" required placeholder="ข้อความใน URL ระหว่าง /d/ และ /edit" /></label>
+                <label>ชื่อแท็บ<input name="sheet_name" required placeholder="เช่น Sheet1" /></label>
+                <label>ช่วงข้อมูล<input name="read_range" value="A:ZZ" required placeholder="เช่น A:ZZ" /></label>
+                <label>ผู้รับผิดชอบ<input name="owner_name" placeholder="เช่น ฝ่ายทะเบียน" /></label>
+                <label>คำอธิบาย<textarea name="description" rows="3" placeholder="คำอธิบายแหล่งข้อมูล (ถ้ามี)"></textarea></label>
+                <div class="form-actions"><button type="submit">บันทึกแหล่งข้อมูล / เพิ่มแท็บ</button><button id="admin-google-source-reset" class="secondary" type="button">ล้างฟอร์ม</button></div>
+              </form>
+              <h3 class="detail-section">แหล่งข้อมูลที่ลงทะเบียนแล้ว</h3>
+              <div id="admin-google-sources-list" class="catalog-list"></div>
+            </div>
+          </details>
+          <details id="admin-records-panel" class="panel admin-records">
+            <summary><span><strong>ระเบียนสำหรับจัดการ</strong><span class="muted">ค้นหา กรอง และกดเพื่อเปิดรายการ</span></span></summary>
+            <div class="admin-records-content">
+              <form id="admin-search-form" class="admin-record-search">
+                <label>คำค้นสำหรับแก้ไข<input id="admin-query" placeholder="เลขทะเบียน, รายการ, ชนิด…" /></label>
+                <label>ชีตต้นทาง<select id="admin-sheet-filter"><option value="">ทุกชีต</option></select></label>
+                <button type="submit">ค้นหาระเบียน</button>
+              </form>
+              <p id="admin-record-summary" class="muted"></p>
+              <div class="table-wrap"><table><thead><tr><th>เลขทะเบียน</th><th>รายการ</th><th>แหล่งข้อมูล</th><th>การทำงาน</th></tr></thead><tbody id="admin-records-body"></tbody></table></div>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -89,6 +119,6 @@
         <div id="detail-content"></div>
       </section>
     </main>
-    <script src="/assets/app.js?v=20261008-2"></script>
+    <script src="/assets/app.js?v=20261014-4"></script>
   </body>
 </html>

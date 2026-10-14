@@ -13,10 +13,25 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .admin_security import admin_access_configured, create_session_token, valid_session_token, verify_password
-from .config import APP_ENV, APP_NAME, FRONTEND_DIR, IMAGE_STORAGE_DIR, PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX, ADMIN_SESSION_TTL_SECONDS
+from .config import (
+    ADMIN_SESSION_TTL_SECONDS,
+    APP_ENV,
+    APP_NAME,
+    FRONTEND_DIR,
+    GOOGLE_SERVICE_ACCOUNT_FILE,
+    GOOGLE_SERVICE_ACCOUNT_JSON,
+    GOOGLE_SHEETS_ENABLED,
+    GOOGLE_SHEETS_WEB_SYNC_ENABLED,
+    IMAGE_STORAGE_DIR,
+    PAGE_SIZE_DEFAULT,
+    PAGE_SIZE_MAX,
+)
+from .configure_google_sheet import configure_google_sheet
 from .database import Base, engine, get_session
+from .google_sheets import GoogleSheetsConfigurationError
 from .models import AuditLog, DataQualityIssue, DataSource, Record, SourceSheetConfig, SyncRun
 from .normalization import clean_multiline_text, clean_text, normalise_image_url
+from .sync_google_sheet import sync_google_source
 
 
 app = FastAPI(title=APP_NAME, version="0.1.0")
@@ -30,6 +45,10 @@ EDITABLE_RECORD_FIELDS = (
     "status_antique", "status_storage",
 )
 MULTILINE_RECORD_FIELDS = {"title_description", "dimensions_text", "period", "provenance"}
+CREATE_REQUIRED_FIELDS = {
+    "registration_no": "เลขทะเบียน",
+    "title_description": "รายการ",
+}
 
 
 class AdminLogin(BaseModel):
@@ -51,6 +70,19 @@ class RecordMutation(BaseModel):
     status_photographed: str | None = None
     status_antique: str | None = None
     status_storage: str | None = None
+
+
+class GoogleSheetConfigMutation(BaseModel):
+    """An admin-only allow-list entry; credentials never come from this form."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_name: str = Field(min_length=1, max_length=255)
+    spreadsheet_id: str = Field(min_length=1, max_length=512)
+    sheet_name: str = Field(min_length=1, max_length=255)
+    read_range: str = Field(default="A:ZZ", min_length=1, max_length=255)
+    owner_name: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=5000)
 
 
 @app.middleware("http")
@@ -87,6 +119,28 @@ def mutation_values(payload: RecordMutation) -> dict:
     return values
 
 
+def require_create_values(values: dict) -> None:
+    missing_labels = [label for field, label in CREATE_REQUIRED_FIELDS.items() if not values.get(field)]
+    if missing_labels:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"กรุณากรอกข้อมูลบังคับ: {', '.join(missing_labels)}",
+        )
+
+
+def require_google_web_sync_configured() -> None:
+    if not GOOGLE_SHEETS_WEB_SYNC_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ยังไม่ได้เปิดใช้การ sync Google Sheets จากหน้าเว็บ",
+        )
+    if not GOOGLE_SHEETS_ENABLED or not (GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_SERVICE_ACCOUNT_JSON):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ยังไม่ได้ตั้งค่า service account สำหรับการ sync บนเว็บ",
+        )
+
+
 def editable_snapshot(record: Record) -> dict:
     return {field: getattr(record, field) for field in EDITABLE_RECORD_FIELDS}
 
@@ -111,10 +165,17 @@ def manual_source(session: Session) -> DataSource:
     return source
 
 
-def add_audit(session: Session, action: str, entity_id: int | str, before: dict | None, after: dict | None) -> None:
+def add_audit(
+    session: Session,
+    action: str,
+    entity_id: int | str,
+    before: dict | None,
+    after: dict | None,
+    entity_type: str = "record",
+) -> None:
     session.add(AuditLog(
         action=action,
-        entity_type="record",
+        entity_type=entity_type,
         entity_id=str(entity_id),
         actor="local-admin",
         before_data=before,
@@ -144,7 +205,16 @@ def record_summary(record: Record) -> dict:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "environment": APP_ENV, "admin_access_configured": admin_access_configured()}
+    return {
+        "status": "ok",
+        "environment": APP_ENV,
+        "admin_access_configured": admin_access_configured(),
+        "google_sheets_web_sync_available": (
+            GOOGLE_SHEETS_WEB_SYNC_ENABLED
+            and GOOGLE_SHEETS_ENABLED
+            and bool(GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_SERVICE_ACCOUNT_JSON)
+        ),
+    }
 
 
 @app.get("/api/records")
@@ -325,6 +395,7 @@ def catalog(session: Annotated[Session, Depends(get_session)]) -> dict:
                 "updated": last_run.rows_updated,
                 "skipped": last_run.rows_skipped,
                 "errors": last_run.error_count,
+                "message": last_run.message,
             } if last_run else None,
         })
     return {"sources": response}
@@ -361,6 +432,133 @@ def admin_logout(response: Response) -> dict:
     return {"authenticated": False}
 
 
+@app.get("/api/admin/google-sheets")
+def admin_google_sheet_sources(
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Return the editable allow-list only to an authenticated administrator."""
+    sources = session.scalars(select(DataSource).where(
+        DataSource.connection_type == "google_sheets"
+    ).order_by(DataSource.name)).all()
+    return {"sources": [{
+        "id": source.id,
+        "name": source.name,
+        "spreadsheet_id": source.external_id,
+        "owner_name": source.owner_name,
+        "description": source.description,
+        "is_active": source.is_active,
+        "sheets": [{
+            "name": config.sheet_name,
+            "read_range": config.read_range,
+            "is_active": config.is_active,
+        } for config in session.scalars(select(SourceSheetConfig).where(
+            SourceSheetConfig.source_id == source.id
+        ).order_by(SourceSheetConfig.sheet_name)).all()],
+    } for source in sources]}
+
+
+@app.post("/api/admin/google-sheets")
+def configure_google_sheet_from_web(
+    payload: GoogleSheetConfigMutation,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Add one approved tab to the central Google Sheets allow-list."""
+    values = {
+        "source_name": clean_text(payload.source_name),
+        "spreadsheet_id": clean_text(payload.spreadsheet_id),
+        "sheet_name": clean_text(payload.sheet_name),
+        "read_range": clean_text(payload.read_range) or "A:ZZ",
+        "owner_name": clean_text(payload.owner_name),
+        "description": clean_multiline_text(payload.description),
+    }
+    if not all(values[name] for name in ("source_name", "spreadsheet_id", "sheet_name")):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="กรุณากรอกชื่อแหล่งข้อมูล, Spreadsheet ID และชื่อแท็บ")
+    existing_source = session.scalar(select(DataSource).where(DataSource.name == values["source_name"]))
+    if existing_source and existing_source.connection_type == "google_sheets" and existing_source.external_id != values["spreadsheet_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="ชื่อแหล่งข้อมูลนี้ผูกกับ Spreadsheet ID อื่นอยู่แล้ว กรุณาใช้ชื่อแหล่งข้อมูลใหม่",
+        )
+    try:
+        result = configure_google_sheet(**values)
+    except (ValueError, GoogleSheetsConfigurationError) as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+
+    add_audit(session, "configure", result["source_id"], None, {
+        "source_name": result["source_name"],
+        "sheet_name": result["sheet_name"],
+        "read_range": result["read_range"],
+    }, entity_type="data_source")
+    session.commit()
+    return result
+
+
+@app.post("/api/admin/google-sheets/{source_id}/preview")
+def preview_google_sheets_from_web(
+    source_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    require_google_web_sync_configured()
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type != "google_sheets":
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
+    try:
+        return {"source_id": source.id, "source_name": source.name, **sync_google_source(source.name, dry_run=True)}
+    except GoogleSheetsConfigurationError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="ไม่สามารถตรวจสอบ Google Sheets ได้ โปรดตรวจสิทธิ์การแชร์ชีตและการเชื่อมต่อ",
+        ) from error
+
+
+@app.post("/api/admin/google-sheets/{source_id}/sync")
+def sync_google_sheets_from_web(
+    source_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Sync one pre-approved Google Sheets source after an admin confirms it.
+
+    The browser supplies only a central source ID. The service resolves the
+    spreadsheet ID, tab allow-list, and credential on the server, so a user
+    cannot point the system at an arbitrary Google Sheet.
+    """
+    require_google_web_sync_configured()
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type != "google_sheets":
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
+    if not source.is_active:
+        raise HTTPException(status_code=409, detail="แหล่งข้อมูลนี้ถูกปิดการใช้งาน")
+
+    try:
+        result = sync_google_source(source.name)
+    except GoogleSheetsConfigurationError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="ไม่สามารถอ่าน Google Sheets ได้ โปรดตรวจสิทธิ์การแชร์ชีตและการเชื่อมต่อ แล้วลองใหม่",
+        ) from error
+
+    add_audit(
+        session,
+        "sync",
+        source.id,
+        None,
+        result,
+        entity_type="data_source",
+    )
+    session.commit()
+    return {"source_id": source.id, "source_name": source.name, **result}
+
+
 @app.post("/api/admin/records", status_code=status.HTTP_201_CREATED)
 def create_record(
     payload: RecordMutation,
@@ -368,6 +566,7 @@ def create_record(
     _: Annotated[None, Depends(require_admin)],
 ) -> dict:
     values = mutation_values(payload)
+    require_create_values(values)
     source = manual_source(session)
     source_row_key = f"manual-{uuid.uuid4()}"
     record = Record(
@@ -439,6 +638,7 @@ def admin_audit(
     return {"items": [{
         "id": item.id,
         "action": item.action,
+        "entity_type": item.entity_type,
         "entity_id": item.entity_id,
         "actor": item.actor,
         "created_at": item.created_at,

@@ -1,4 +1,4 @@
-const BUILD_VERSION = "2026.10.08.1";
+const BUILD_VERSION = "2026.10.14.4";
 const state = { page: 1, pageSize: 25, total: 0, lastItems: [], currentDetailId: null };
 const $ = (selector) => document.querySelector(selector);
 
@@ -78,50 +78,143 @@ async function toggleDuplicateGroups() {
   panel.hidden = !opening; button.setAttribute("aria-expanded", String(opening));
   if (opening) { await loadDuplicateGroups(); panel.scrollIntoView({ behavior: "smooth", block: "start" }); }
 }
-async function loadCatalog() {
-  const data = await (await fetch("/api/catalog")).json();
-  $("#catalog-list").innerHTML = data.sources.map((source) => 
-    { const sync = source.last_sync; 
-      const sheets = (source.configured_sheets || []).filter((sheet) => sheet.is_active).map((sheet) => escapeHtml(sheet.name)).join(", "); 
-      return `<article class="catalog-item"><h3>${escapeHtml(source.name)}</h3><p class="muted">${compact(source.description, "ไม่มีคำอธิบาย")}</p>
-              <div class="catalog-meta"><span>ประเภท: ${escapeHtml(source.connection_type)}</span><span>ชั้นข้อมูล: ${escapeHtml(source.classification)}</span><span>ชีตที่เชื่อม: ${sheets || "-"}</span><span>ระเบียน: ${source.record_count.toLocaleString()}</span><span class="issue">ประเด็นที่ยังไม่ปิด: ${source.unresolved_issues.toLocaleString()}</span><span>sync ล่าสุด: ${sync ? escapeHtml(sync.completed_at || sync.started_at) : "ยังไม่เคย"}</span></div></article>`; }).join("") || `<p class="muted">ยังไม่มีแหล่งข้อมูล</p>`;
+function catalogMessage(message = "", isError = false) {
+  const target = $("#catalog-message"); target.textContent = message; target.classList.toggle("error", isError);
 }
+async function loadCatalog() {
+  const [catalogResponse, sessionResponse, healthResponse] = await Promise.all([
+    fetch("/api/catalog"), fetch("/api/admin/session"), fetch("/api/health"),
+  ]);
+  const data = await catalogResponse.json(); const adminSession = await sessionResponse.json(); const health = await healthResponse.json();
+  const canSyncFromWeb = adminSession.authenticated && health.google_sheets_web_sync_available;
+  $("#catalog-list").innerHTML = data.sources.map((source) => {
+    const sync = source.last_sync;
+    const sheets = (source.configured_sheets || []).filter((sheet) => sheet.is_active).map((sheet) => escapeHtml(sheet.name)).join(", ");
+    const syncAction = source.connection_type === "google_sheets" && adminSession.authenticated
+      ? `<div class="catalog-actions">${canSyncFromWeb
+        ? `<button type="button" data-google-sync-source="${source.id}" data-source-name="${escapeHtml(source.name)}">Sync ข้อมูลล่าสุด</button>`
+        : `<span class="muted">ยังไม่ได้ตั้งค่าให้ sync จากหน้าเว็บ</span>`}</div>`
+      : "";
+    return `<article class="catalog-item"><h3>${escapeHtml(source.name)}</h3><p class="muted">${compact(source.description, "ไม่มีคำอธิบาย")}</p>
+      <div class="catalog-meta"><span>ประเภท: ${escapeHtml(source.connection_type)}</span><span>ชั้นข้อมูล: ${escapeHtml(source.classification)}</span><span>ชีตที่เชื่อม: ${sheets || "-"}</span><span>ระเบียน: ${source.record_count.toLocaleString()}</span><span class="issue">ประเด็นที่ยังไม่ปิด: ${source.unresolved_issues.toLocaleString()}</span><span>sync ล่าสุด: ${sync ? escapeHtml(sync.completed_at || sync.started_at) : "ยังไม่เคย"}</span>${sync?.message ? `<span title="${escapeHtml(sync.message)}">${escapeHtml(sync.message)}</span>` : ""}</div>${syncAction}</article>`;
+  }).join("") || `<p class="muted">ยังไม่มีแหล่งข้อมูล</p>`;
+  document.querySelectorAll("[data-google-sync-source]").forEach((button) => button.addEventListener("click", () => syncGoogleSource(button)));
+}
+async function syncGoogleSource(button) {
+  const sourceName = button.dataset.sourceName || "แหล่งข้อมูลนี้";
+  if (!window.confirm(`ยืนยันการดึงข้อมูลล่าสุดจาก ${sourceName}? ระบบจะอ่าน Google Sheets ต้นทางและอัปเดตสำเนากลางเท่านั้น`)) return;
+  button.disabled = true; const originalText = button.textContent; button.textContent = "กำลัง Sync…"; catalogMessage("กำลังอ่านข้อมูลจาก Google Sheets…");
+  try {
+    const result = await adminFetch(`/api/admin/google-sheets/${button.dataset.googleSyncSource}/sync`, { method: "POST", body: "{}" });
+    catalogMessage(`Sync สำเร็จ: อ่าน ${result.rows_read.toLocaleString()} แถว · เพิ่ม ${result.inserted.toLocaleString()} · อัปเดต ${result.updated.toLocaleString()} · ลบจากต้นทาง ${result.deleted.toLocaleString()} · ไม่เปลี่ยนแปลง ${result.skipped.toLocaleString()} · ประเด็น ${result.errors.toLocaleString()}`);
+    await Promise.all([loadCatalog(), loadRecords(), loadFilterOptions()]);
+  } catch (error) {
+    catalogMessage(error.message, true); button.disabled = false; button.textContent = originalText;
+  }
+}
+const STATUS_OPTIONS = {
+  data_check: ["ตรวจสอบแล้ว", "ยังไม่ตรวจสอบ", "อยู่ในระหว่างการตรวจสอบ"],
+  photographed: ["ถ่ายภาพแล้ว", "ยังไม่ถ่ายภาพ", "อยู่ในระหว่างการถ่ายภาพ"],
+  antique: ["ลงระบบแล้ว", "ยังไม่ลงระบบ", "อยู่ในระหว่างการลงระบบ"],
+  storage: ["ส่งขึ้นห้องคลังแล้ว", "ยังไม่ส่งขึ้นห้องคลัง", "อยู่ในระหว่างการส่งขึ้นห้องคลัง"],
+};
+const ADMIN_CREATE_REQUIRED = new Set(["registration_no", "title_description"]);
 const ADMIN_FIELDS = [
   ["registration_no", "เลขทะเบียน", "text"], ["previous_registration_no", "เลขทะเบียนเดิม", "text"],
   ["title_description", "รายการ", "textarea"], ["dimensions_text", "ขนาด", "textarea"],
   ["material", "ชนิด", "text"], ["period", "อายุสมัย", "textarea"], ["provenance", "ประวัติที่มา", "textarea"],
-  ["image_url", "ลิงก์รูปภาพ", "url"], ["status_data_check", "การตรวจสอบข้อมูล", "text"],
-  ["status_photographed", "การถ่ายภาพแล้ว", "text"], ["status_antique", "การลงระบบ Antique", "text"],
-  ["status_storage", "การส่งขึ้นห้องคลัง", "text"],
+  ["image_url", "ลิงก์รูปภาพ", "url"], ["status_data_check", "การตรวจสอบข้อมูล", "select", STATUS_OPTIONS.data_check],
+  ["status_photographed", "การถ่ายภาพแล้ว", "select", STATUS_OPTIONS.photographed], ["status_antique", "การลงระบบ Antique", "select", STATUS_OPTIONS.antique],
+  ["status_storage", "การส่งขึ้นห้องคลัง", "select", STATUS_OPTIONS.storage],
 ];
 function adminMessage(message = "", isError = false) { const target = $("#admin-message"); target.textContent = message; target.classList.toggle("error", isError); }
+function googleSourceMessage(message = "", isError = false) { const target = $("#admin-google-source-message"); target.textContent = message; target.classList.toggle("error", isError); }
 async function adminFetch(url, options = {}) {
   const response = await fetch(url, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.detail || "ไม่สามารถทำรายการได้"); }
   return response.json();
 }
-function fieldEditor(name, label, type, value) {
-  if (type === "textarea") return `<label>${label}<textarea name="${name}" rows="3">${escapeHtml(value || "")}</textarea></label>`;
-  return `<label>${label}<input name="${name}" type="${type}" value="${escapeHtml(value || "")}" /></label>`;
+function fillGoogleSourceForm(source) {
+  const form = $("#admin-google-source-form");
+  form.elements.source_name.value = source.name || "";
+  form.elements.spreadsheet_id.value = source.spreadsheet_id || "";
+  form.elements.owner_name.value = source.owner_name || "";
+  form.elements.description.value = source.description || "";
+  form.elements.sheet_name.value = "";
+  form.elements.read_range.value = "A:ZZ";
+  $("#admin-google-sources-panel").open = true;
+  form.elements.sheet_name.focus();
+}
+async function loadAdminGoogleSources() {
+  const [sourceData, healthData] = await Promise.all([adminFetch("/api/admin/google-sheets"), fetch("/api/health").then((response) => response.json())]);
+  const canPreview = healthData.google_sheets_web_sync_available;
+  const sourcesById = new Map(sourceData.sources.map((source) => [String(source.id), source]));
+  $("#admin-google-sources-list").innerHTML = sourceData.sources.map((source) => {
+    const tabs = source.sheets.map((sheet) => `${escapeHtml(sheet.name)} <span class="muted">(${escapeHtml(sheet.read_range)})</span>`).join(" · ") || "ยังไม่มีแท็บ";
+    return `<article class="catalog-item"><h3>${escapeHtml(source.name)}</h3><p class="muted">${compact(source.description, "ไม่มีคำอธิบาย")}</p><div class="catalog-meta"><span>ผู้รับผิดชอบ: ${compact(source.owner_name)}</span><span>แท็บ: ${tabs}</span></div><div class="catalog-actions"><button type="button" class="secondary" data-source-fill="${source.id}">เพิ่มแท็บในไฟล์นี้</button>${canPreview ? `<button type="button" data-source-preview="${source.id}">ตรวจสอบก่อน Sync</button>` : `<span class="muted">ตั้งค่า key ใน container ก่อนจึงตรวจสอบได้</span>`}</div></article>`;
+  }).join("") || `<p class="muted">ยังไม่มี Google Sheets ที่ลงทะเบียน</p>`;
+  document.querySelectorAll("[data-source-fill]").forEach((button) => button.addEventListener("click", () => fillGoogleSourceForm(sourcesById.get(button.dataset.sourceFill))));
+  document.querySelectorAll("[data-source-preview]").forEach((button) => button.addEventListener("click", () => previewGoogleSource(button)));
+}
+async function previewGoogleSource(button) {
+  button.disabled = true; const originalText = button.textContent; button.textContent = "กำลังตรวจสอบ…"; googleSourceMessage("กำลังอ่าน Google Sheets โดยยังไม่บันทึกข้อมูล…");
+  try {
+    const result = await adminFetch(`/api/admin/google-sheets/${button.dataset.sourcePreview}/preview`, { method: "POST", body: "{}" });
+    const sheets = result.sheets.map((sheet) => `${sheet.sheet}: ${sheet.rows_received.toLocaleString()} แถว${sheet.stable_id_header ? ` · ใช้ ${sheet.stable_id_header}` : " · ยังไม่มี record_id"}${sheet.duplicate_stable_ids ? ` · ID ซ้ำ ${sheet.duplicate_stable_ids}` : ""}`).join(" | ");
+    googleSourceMessage(`ตรวจสอบแล้ว: ${sheets || "ไม่พบข้อมูล"}`);
+  } catch (error) { googleSourceMessage(error.message, true); }
+  finally { button.disabled = false; button.textContent = originalText; }
+}
+async function saveGoogleSource(event) {
+  event.preventDefault(); const form = event.currentTarget; const values = new FormData(form); const payload = {};
+  ["source_name", "spreadsheet_id", "sheet_name", "read_range", "owner_name", "description"].forEach((name) => { payload[name] = String(values.get(name) || "").trim() || null; });
+  try {
+    const result = await adminFetch("/api/admin/google-sheets", { method: "POST", body: JSON.stringify(payload) });
+    googleSourceMessage(`บันทึกแล้ว: ${result.source_name} / ${result.sheet_name} — กด “ตรวจสอบก่อน Sync” แล้วจึงไป Sync จาก Data Catalog`);
+    form.elements.sheet_name.value = "";
+    await Promise.all([loadAdminGoogleSources(), loadCatalog(), loadAudit()]);
+  } catch (error) { googleSourceMessage(error.message, true); }
+}
+function fieldEditor(name, label, type, value, options = [], required = false) {
+  const requiredMarker = required ? ` <span class="required" aria-hidden="true">*</span>` : "";
+  const requiredAttribute = required ? " required aria-required=\"true\"" : "";
+  if (type === "select") {
+    const safeOptions = value && !options.includes(value) ? [value, ...options] : options;
+    return `<label>${label}${requiredMarker}<select name="${name}"${requiredAttribute}><option value="">ไม่ระบุ</option>${safeOptions.map((option) => `<option value="${escapeHtml(option)}"${option === value ? " selected" : ""}>${escapeHtml(option)}${options.includes(option) ? "" : " (ค่าจากต้นทาง)"}</option>`).join("")}</select></label>`;
+  }
+  if (type === "textarea") return `<label>${label}${requiredMarker}<textarea name="${name}" rows="3"${requiredAttribute}>${escapeHtml(value || "")}</textarea></label>`;
+  return `<label>${label}${requiredMarker}<input name="${name}" type="${type}" value="${escapeHtml(value || "")}"${requiredAttribute} /></label>`;
 }
 function renderAdminEditor(record = null) {
   const heading = record ? `แก้ไขระเบียน ${escapeHtml(record.registration_no || `#${record.id}`)}` : "เพิ่มระเบียนใหม่";
   const sourceNote = record && record.source_name !== "แก้ไขโดยเจ้าหน้าที่" ? `<p class="warning-text">ระเบียนนี้มาจาก ${escapeHtml(record.source_name || "แหล่งข้อมูล")}; หากมีการ sync แถวต้นทางที่เปลี่ยนแล้ว ข้อมูลที่แก้ในสำเนากลางอาจถูกแทนที่</p>` : "";
-  $("#admin-editor").innerHTML = `<h3>${heading}</h3>${sourceNote}<form id="admin-record-form" class="admin-form"><input name="record_id" type="hidden" value="${record ? record.id : ""}" /><div class="form-grid">${ADMIN_FIELDS.map(([name, label, type]) => fieldEditor(name, label, type, record?.[name])).join("")}</div><div class="form-actions"><button type="submit">${record ? "บันทึกการแก้ไข" : "สร้างระเบียน"}</button>${record ? `<button id="admin-cancel-edit" class="secondary" type="button">ยกเลิก</button>` : ""}</div></form>`;
+  const requiredNote = record ? "" : `<p class="muted">ช่องที่มี <span class="required">*</span> จำเป็นต้องกรอกก่อนสร้างระเบียน</p>`;
+  $("#admin-editor").innerHTML = `<h3>${heading}</h3>${requiredNote}${sourceNote}<form id="admin-record-form" class="admin-form"><input name="record_id" type="hidden" value="${record ? record.id : ""}" /><div class="form-grid">${ADMIN_FIELDS.map(([name, label, type, options]) => fieldEditor(name, label, type, record?.[name], options, !record && ADMIN_CREATE_REQUIRED.has(name))).join("")}</div><div class="form-actions"><button type="submit">${record ? "บันทึกการแก้ไข" : "สร้างระเบียน"}</button>${record ? `<button id="admin-cancel-edit" class="secondary" type="button">ยกเลิก</button>` : ""}</div></form>`;
   $("#admin-record-form").addEventListener("submit", saveAdminRecord);
   $("#admin-cancel-edit")?.addEventListener("click", () => renderAdminEditor());
 }
 async function loadAdminRecords() {
   const query = $("#admin-query").value.trim();
-  const params = new URLSearchParams({ page: "1", page_size: "50" }); if (query) params.set("q", query);
+  const sourceSheet = $("#admin-sheet-filter").value;
+  const params = new URLSearchParams({ page: "1", page_size: "20" }); if (query) params.set("q", query); if (sourceSheet) params.set("source_sheet", sourceSheet);
   const data = await (await fetch(`/api/records?${params}`)).json();
+  $("#admin-record-summary").textContent = data.total > data.items.length ? `พบ ${data.total.toLocaleString()} ระเบียน · แสดง 20 รายการแรก กรุณาค้นหาหรือเลือกชีตเพื่อดูเฉพาะรายการที่ต้องการ` : `พบ ${data.total.toLocaleString()} ระเบียน`;
   $("#admin-records-body").innerHTML = data.items.map((record) => `<tr><td>${compact(record.registration_no)}</td><td><div class="clamp">${compact(record.title_description)}</div></td><td>${escapeHtml(record.source_name || "")}<br><span class="muted">${escapeHtml(record.source_sheet)}</span></td><td class="actions"><button class="small secondary" data-admin-edit="${record.id}">แก้ไข</button><button class="small danger" data-admin-delete="${record.id}">ลบ</button></td></tr>`).join("") || `<tr><td colspan="4" class="muted">ไม่พบระเบียน</td></tr>`;
   document.querySelectorAll("[data-admin-edit]").forEach((button) => button.addEventListener("click", async () => { const record = await (await fetch(`/api/records/${button.dataset.adminEdit}`)).json(); renderAdminEditor(record); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   document.querySelectorAll("[data-admin-delete]").forEach((button) => button.addEventListener("click", () => deleteAdminRecord(button.dataset.adminDelete)));
 }
+async function loadAdminSheetOptions() {
+  const select = $("#admin-sheet-filter"); const selected = select.value;
+  const data = await (await fetch("/api/dashboard")).json();
+  select.innerHTML = `<option value="">ทุกชีต</option>${data.by_source_sheet.map((item) => `<option value="${escapeHtml(item.label)}">${escapeHtml(item.label)} (${item.count.toLocaleString()})</option>`).join("")}`;
+  select.value = [...select.options].some((option) => option.value === selected) ? selected : "";
+}
 async function loadAudit() {
   const data = await adminFetch("/api/admin/audit");
-  $("#audit-list").innerHTML = data.items.map((item) => `<div class="audit-item"><strong>${escapeHtml(item.action)}</strong> ระเบียน #${escapeHtml(item.entity_id)}<br><span class="muted">${new Date(item.created_at).toLocaleString("th-TH")}</span></div>`).join("") || `<p class="muted">ยังไม่มีประวัติการแก้ไข</p>`;
+  $("#audit-list").innerHTML = data.items.map((item) => {
+    const entity = item.entity_type === "data_source" ? "แหล่งข้อมูล" : "ระเบียน";
+    return `<div class="audit-item"><strong>${escapeHtml(item.action)}</strong> ${entity} #${escapeHtml(item.entity_id)}<br><span class="muted">${new Date(item.created_at).toLocaleString("th-TH")}</span></div>`;
+  }).join("") || `<p class="muted">ยังไม่มีประวัติการแก้ไข</p>`;
 }
 async function loadAdmin() {
   const session = await (await fetch("/api/admin/session")).json();
@@ -129,7 +222,7 @@ async function loadAdmin() {
   $("#admin-content").hidden = !session.authenticated;
   if (!session.configured) { adminMessage("ผู้ดูแลยังไม่ได้ตั้งรหัสผ่านในไฟล์ .env", true); return; }
   if (!session.authenticated) { adminMessage("", false); return; }
-  adminMessage("ปลดล็อกหน้าจัดการแล้ว", false); renderAdminEditor(); await Promise.all([loadAdminRecords(), loadAudit()]);
+  adminMessage("ปลดล็อกหน้าจัดการแล้ว", false); renderAdminEditor(); await loadAdminSheetOptions(); await Promise.all([loadAdminRecords(), loadAudit(), loadAdminGoogleSources()]);
 }
 async function saveAdminRecord(event) {
   event.preventDefault();
@@ -174,7 +267,9 @@ $("#previous-page").addEventListener("click", () => { state.page -= 1; loadRecor
 $("[data-back]").addEventListener("click", () => navigate("explorer"));
 $("#admin-login-form").addEventListener("submit", async (event) => { event.preventDefault(); try { await adminFetch("/api/admin/login", { method: "POST", body: JSON.stringify({ password: $("#admin-password").value }) }); $("#admin-password").value = ""; await loadAdmin(); } catch (error) { adminMessage(error.message, true); } });
 $("#admin-new-record").addEventListener("click", () => renderAdminEditor());
-$("#admin-search-form").addEventListener("submit", (event) => { event.preventDefault(); loadAdminRecords(); });
+$("#admin-google-source-form").addEventListener("submit", saveGoogleSource);
+$("#admin-google-source-reset").addEventListener("click", () => { $("#admin-google-source-form").reset(); googleSourceMessage(); });
+$("#admin-search-form").addEventListener("submit", (event) => { event.preventDefault(); $("#admin-records-panel").open = true; loadAdminRecords(); });
 $("#admin-logout").addEventListener("click", async () => { await adminFetch("/api/admin/logout", { method: "POST", body: "{}" }); await loadAdmin(); });
 window.addEventListener("popstate", () => renderRoute());
 initialise().catch((error) => { $("#freshness").textContent = `เกิดข้อผิดพลาด: ${error.message}`; });

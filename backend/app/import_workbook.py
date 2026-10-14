@@ -33,6 +33,12 @@ FIELD_ALIASES = {
     "status_storage": ("การส่งขึ้นห้องคลัง",),
 }
 
+# This value is not displayed as an artefact registration number. It is a
+# source-owned, immutable row identifier used only to preserve identity when
+# staff sort or move rows in an approved tab.
+STABLE_ROW_ID_ALIASES = ("record_id", "Record ID", "รหัสประจำรายการ", "รหัสรายการ")
+MAX_STABLE_ROW_ID_LENGTH = 220
+
 
 @dataclass(frozen=True)
 class TabularSheet:
@@ -56,6 +62,18 @@ def first_value(row: list[object], indexes: dict[str, int], aliases: tuple[str, 
         if index is not None and index < len(row):
             return clean_multiline_text(row[index]) if multiline else clean_text(row[index])
     return None
+
+
+def stable_row_key(row: list[object], indexes: dict[str, int], row_number: int) -> tuple[str, str | None]:
+    """Return an immutable source key when a sheet supplies `record_id`.
+
+    Existing sources without the optional column retain their current
+    row-based identity so this change is backwards compatible.
+    """
+    stable_id = first_value(row, indexes, STABLE_ROW_ID_ALIASES)
+    if stable_id and len(stable_id) <= MAX_STABLE_ROW_ID_LENGTH:
+        return f"id-{stable_id}", stable_id
+    return f"row-{row_number}", None
 
 
 def canonical_payload(row: list[object], headers: list[str]) -> tuple[dict, dict]:
@@ -88,16 +106,22 @@ def sync_tabular_sheets(
     source: DataSource,
     sheets: Iterable[TabularSheet],
     run_message: str,
+    reconcile_missing: bool = False,
 ) -> dict:
     """Validate and upsert approved tabular data into one source.
 
     The row identity is source + sheet + original row number.  Repeating an
     unchanged sync only increments `skipped`; it does not create new records.
+    When `reconcile_missing` is true, rows that were previously imported from
+    a successfully validated tab but no longer exist there are removed from the
+    central copy. This is intentionally opt-in so an Excel import never
+    deletes records merely because a workbook was imported partially.
     """
     run = SyncRun(source_id=source.id, status="running")
     session.add(run)
     session.flush()
     known_aliases = {alias for aliases in FIELD_ALIASES.values() for alias in aliases}
+    removed_count = 0
 
     for sheet in sheets:
         rows = iter(sheet.rows)
@@ -116,11 +140,30 @@ def sync_tabular_sheets(
             ))
             continue
 
+        indexes = {header: index for index, header in enumerate(headers) if header}
+        observed_row_keys: set[str] = set()
+        seen_stable_ids: set[str] = set()
+        identity_error = False
         for row_number, values in enumerate(rows, start=sheet.header_row_number + 1):
             row = list(values)
             if not any(value not in (None, "") for value in row):
                 continue
             run.rows_read += 1
+            row_key, stable_id = stable_row_key(row, indexes, row_number)
+            if stable_id and stable_id in seen_stable_ids:
+                run.error_count += 1
+                identity_error = True
+                session.add(DataQualityIssue(
+                    source_id=source.id,
+                    source_sheet=sheet.name,
+                    source_row_number=row_number,
+                    severity="error",
+                    code="DUPLICATE_STABLE_ROW_ID",
+                    message=f"พบ record_id ซ้ำ ({stable_id}) จึงข้ามแถวนี้เพื่อไม่ให้ทับข้อมูล",
+                ))
+                continue
+            if stable_id:
+                seen_stable_ids.add(stable_id)
             payload, raw_data = canonical_payload(row, headers)
             embedded_image_url = sheet.embedded_image_urls_by_row.get(row_number)
             if embedded_image_url:
@@ -128,14 +171,29 @@ def sync_tabular_sheets(
                 raw_data["_embedded_image_url"] = embedded_image_url
             raw_json = json.dumps(raw_data, ensure_ascii=False, sort_keys=True)
             raw_hash = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()
-            row_key = f"row-{row_number}"
+            observed_row_keys.add(row_key)
             record = session.scalar(select(Record).where(
                 Record.source_id == source.id,
                 Record.source_sheet == sheet.name,
                 Record.source_row_key == row_key,
             ))
+            # During adoption of record_id, retain the existing central record
+            # for the same row instead of creating a duplicate just because
+            # its source key changed from row-12 to id-ARCH-00012.
+            if record is None and stable_id:
+                record = session.scalar(select(Record).where(
+                    Record.source_id == source.id,
+                    Record.source_sheet == sheet.name,
+                    Record.source_row_key == f"row-{row_number}",
+                ))
             if record is not None and record.raw_hash == raw_hash:
                 run.rows_skipped += 1
+                # The content can be unchanged even when staff sorted the
+                # sheet. Keep the traceability fields current without
+                # treating that as a content update.
+                record.source_row_number = row_number
+                record.source_row_key = row_key
+                record.source_url = sheet.source_url
                 if row_number in sheet.duplicate_embedded_image_rows:
                     run.error_count += 1
                     session.add(DataQualityIssue(
@@ -166,6 +224,7 @@ def sync_tabular_sheets(
                 for field, value in payload.items():
                     setattr(record, field, value)
                 record.source_row_number = row_number
+                record.source_row_key = row_key
                 record.source_url = sheet.source_url
                 record.raw_hash = raw_hash
                 record.raw_data = raw_data
@@ -194,15 +253,40 @@ def sync_tabular_sheets(
                     message="พบรูปภาพฝังมากกว่า 1 รูปในช่องรูปภาพ จึงไม่จับคู่รูปอัตโนมัติ",
                 ))
 
+        # A duplicate record_id makes it ambiguous which original record was
+        # removed. Keep the previous central copy intact until staff fix the
+        # conflicting IDs in the source sheet.
+        if reconcile_missing and not identity_error:
+            stale_statement = select(Record).where(
+                Record.source_id == source.id,
+                Record.source_sheet == sheet.name,
+            )
+            if observed_row_keys:
+                stale_statement = stale_statement.where(Record.source_row_key.not_in(observed_row_keys))
+            stale_records = session.scalars(stale_statement).all()
+            for stale_record in stale_records:
+                # Preserve data-quality history while allowing the imported
+                # record to disappear with its source row.
+                for issue in session.scalars(select(DataQualityIssue).where(
+                    DataQualityIssue.record_id == stale_record.id
+                )).all():
+                    issue.record_id = None
+                session.delete(stale_record)
+                removed_count += 1
+
     run.status = "completed"
     run.completed_at = datetime.now(timezone.utc)
-    run.message = run_message
+    run.message = (
+        f"{run_message}; removed stale records: {removed_count}"
+        if reconcile_missing else run_message
+    )
     return {
         "run_id": run.id,
         "rows_read": run.rows_read,
         "inserted": run.rows_inserted,
         "updated": run.rows_updated,
         "skipped": run.rows_skipped,
+        "deleted": removed_count,
         "errors": run.error_count,
     }
 

@@ -21,11 +21,12 @@ def env_flag(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
 
-# Google Sheets is deliberately opt-in.  Credentials are only read by the
-# command-line sync worker, never from a browser request.
+# Google Sheets is deliberately opt-in. Credentials are read only by the
+# server-side sync service, never sent by or exposed to a browser request.
 GOOGLE_SHEETS_ENABLED = env_flag("GOOGLE_SHEETS_ENABLED")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+GOOGLE_SHEETS_WEB_SYNC_ENABLED = env_flag("GOOGLE_SHEETS_WEB_SYNC_ENABLED")
 
 # Local administrator access. Keep these in .env (which is gitignored), never
 # in source control. The password value is a one-way PBKDF2 hash.
