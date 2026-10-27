@@ -2,10 +2,12 @@ from collections import Counter
 from datetime import datetime
 import hashlib
 import json
+from pathlib import Path
+import shutil
 import uuid
 from typing import Annotated
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,10 +30,12 @@ from .config import (
 )
 from .configure_google_sheet import configure_google_sheet
 from .database import Base, engine, get_session
-from .google_sheets import GoogleSheetsConfigurationError
-from .models import AuditLog, DataQualityIssue, DataSource, Record, SourceSheetConfig, SyncRun
+from .google_sheets import GoogleSheetsConfigurationError, normalise_spreadsheet_id
+from .models import AuditLog, DataQualityIssue, DataSource, ImageBridgeConfig, Record, SourceSheetConfig, SyncRun
 from .normalization import clean_multiline_text, clean_text, normalise_image_url
+from .record_images import image_summary, store_record_image, uploaded_image_suffix
 from .sync_google_sheet import sync_google_source
+from .sync_google_image_bridge import sync_google_image_bridge
 
 
 app = FastAPI(title=APP_NAME, version="0.1.0")
@@ -49,6 +53,9 @@ CREATE_REQUIRED_FIELDS = {
     "registration_no": "เลขทะเบียน",
     "title_description": "รายการ",
 }
+MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_BATCH_FILES = 100
+MAX_IMAGE_BATCH_BYTES = 100 * 1024 * 1024
 
 
 class AdminLogin(BaseModel):
@@ -83,6 +90,21 @@ class GoogleSheetConfigMutation(BaseModel):
     read_range: str = Field(default="A:ZZ", min_length=1, max_length=255)
     owner_name: str | None = Field(default=None, max_length=255)
     description: str | None = Field(default=None, max_length=5000)
+
+
+class ImageBridgeConfigMutation(BaseModel):
+    """Drive folder details only; no credential is ever accepted from a browser."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    drive_folder_id: str = Field(min_length=1, max_length=512)
+    manifest_file_name: str = Field(default="central-data-hub-images.json", min_length=1, max_length=255)
+
+
+class DataQualityIssueResolution(BaseModel):
+    """A deliberate staff acknowledgement; source data is never edited here."""
+
+    is_resolved: bool
 
 
 @app.middleware("http")
@@ -147,6 +169,32 @@ def editable_snapshot(record: Record) -> dict:
 
 def record_hash(values: dict) -> str:
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def remove_xlsx_image_cache(source_name: str) -> int:
+    """Remove only the image-cache directory deterministically owned by one XLSX source.
+
+    The original workbook is never located below ``IMAGE_STORAGE_DIR`` and is
+    therefore unaffected. The exact child name mirrors ``embedded_images``.
+    """
+    root = IMAGE_STORAGE_DIR.resolve()
+    source_key = hashlib.sha256(source_name.encode("utf-8")).hexdigest()[:16]
+    cache_dir = (root / source_key).resolve()
+    if cache_dir.parent != root or not cache_dir.is_dir():
+        return 0
+    file_count = sum(1 for path in cache_dir.rglob("*") if path.is_file())
+    shutil.rmtree(cache_dir)
+    return file_count
+
+
+def store_central_image(session: Session, record: Record, content: bytes, suffix: str) -> str:
+    """Store a manually supplied image in the multi-image gallery."""
+    image, _ = store_record_image(
+        session, record, content, suffix, origin="manual", original_filename="manual-upload", position=1
+    )
+    record.image_url = image.image_url
+    record.raw_data = {**(record.raw_data or {}), "_manual_image_url": image.image_url}
+    return image.image_url
 
 
 def manual_source(session: Session) -> DataSource:
@@ -261,7 +309,12 @@ def list_records(
     records = session.scalars(
         statement.order_by(Record.registration_no, Record.id).offset((page - 1) * page_size).limit(page_size)
     ).all()
-    return {"items": [record_summary(record) for record in records], "total": total, "page": page, "page_size": page_size}
+    return {
+        "items": [record_summary(record) for record in records],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @app.get("/api/records/{record_id}")
@@ -283,6 +336,7 @@ def get_record(record_id: int, session: Annotated[Session, Depends(get_session)]
         "source_url": record.source_url,
         "source_row_number": record.source_row_number,
         "raw_data": record.raw_data,
+        "images": [image_summary(image) for image in record.images],
         "duplicate_candidates": [record_summary(candidate) for candidate in duplicates],
     }
 
@@ -341,7 +395,12 @@ def duplicate_registration_groups(
         record_statement = select(Record).join(Record.source).where(Record.registration_no.in_(registration_numbers))
         if source_id:
             record_statement = record_statement.where(Record.source_id == source_id)
-        for record in session.scalars(record_statement.order_by(Record.registration_no, Record.source_sheet, Record.source_row_number)).all():
+        ordered_records = record_statement.order_by(
+            Record.registration_no,
+            Record.source_sheet,
+            Record.source_row_number,
+        )
+        for record in session.scalars(ordered_records).all():
             records_by_registration[record.registration_no].append(record)
     return {
         "total_groups": total_groups,
@@ -359,7 +418,9 @@ def catalog(session: Annotated[Session, Depends(get_session)]) -> dict:
     response = []
     for source in sources:
         last_run = session.scalar(select(SyncRun).where(SyncRun.source_id == source.id).order_by(SyncRun.id.desc()))
-        record_count = session.scalar(select(func.count()).select_from(Record).where(Record.source_id == source.id)) or 0
+        record_count = session.scalar(
+            select(func.count()).select_from(Record).where(Record.source_id == source.id)
+        ) or 0
         unresolved_issues = session.scalar(select(func.count()).select_from(DataQualityIssue).where(
             DataQualityIssue.source_id == source.id,
             DataQualityIssue.is_resolved.is_(False),
@@ -384,6 +445,13 @@ def catalog(session: Annotated[Session, Depends(get_session)]) -> dict:
                     SourceSheetConfig.source_id == source.id
                 ).order_by(SourceSheetConfig.sheet_name)).all()
             ],
+            "image_bridge": ({
+                "configured": True,
+                "is_active": source.image_bridge_config.is_active,
+                "manifest_file_name": source.image_bridge_config.manifest_file_name,
+                "last_synced_at": source.image_bridge_config.last_synced_at,
+                "last_message": source.image_bridge_config.last_message,
+            } if source.image_bridge_config else {"configured": False}),
             "record_count": record_count,
             "unresolved_issues": unresolved_issues,
             "last_sync": {
@@ -401,6 +469,96 @@ def catalog(session: Annotated[Session, Depends(get_session)]) -> dict:
     return {"sources": response}
 
 
+@app.get("/api/data-quality/issues")
+def list_data_quality_issues(
+    session: Annotated[Session, Depends(get_session)],
+    source_id: int | None = None,
+    severity: str | None = Query(default=None, pattern="^(warning|error)$"),
+    include_resolved: bool = False,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+) -> dict:
+    """Expose import/sync validation findings for staff review without changing sources."""
+    conditions = []
+    if source_id:
+        conditions.append(DataQualityIssue.source_id == source_id)
+    if severity:
+        conditions.append(DataQualityIssue.severity == severity)
+    if not include_resolved:
+        conditions.append(DataQualityIssue.is_resolved.is_(False))
+
+    issue_statement = select(DataQualityIssue).where(*conditions)
+    total = session.scalar(select(func.count()).select_from(issue_statement.subquery())) or 0
+    severity_counts = dict(session.execute(
+        select(DataQualityIssue.severity, func.count(DataQualityIssue.id))
+        .where(*conditions)
+        .group_by(DataQualityIssue.severity)
+    ).all())
+    rows = session.execute(
+        select(
+            DataQualityIssue,
+            DataSource.name.label("source_name"),
+            Record.registration_no.label("registration_no"),
+            Record.title_description.label("title_description"),
+        )
+        .join(DataSource, DataQualityIssue.source_id == DataSource.id)
+        .outerjoin(Record, DataQualityIssue.record_id == Record.id)
+        .where(*conditions)
+        .order_by(DataQualityIssue.is_resolved, DataQualityIssue.created_at.desc(), DataQualityIssue.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "summary": {
+            "errors": severity_counts.get("error", 0),
+            "warnings": severity_counts.get("warning", 0),
+        },
+        "items": [{
+            "id": issue.id,
+            "source_id": issue.source_id,
+            "source_name": source_name,
+            "record_id": issue.record_id,
+            "registration_no": registration_no,
+            "title_description": title_description,
+            "source_sheet": issue.source_sheet,
+            "source_row_number": issue.source_row_number,
+            "severity": issue.severity,
+            "code": issue.code,
+            "message": issue.message,
+            "is_resolved": issue.is_resolved,
+            "created_at": issue.created_at,
+        } for issue, source_name, registration_no, title_description in rows],
+    }
+
+
+@app.patch("/api/admin/data-quality/issues/{issue_id}")
+def resolve_data_quality_issue(
+    issue_id: int,
+    payload: DataQualityIssueResolution,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Mark a finding reviewed; does not hide or modify the original source row."""
+    issue = session.get(DataQualityIssue, issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="ไม่พบประเด็นคุณภาพข้อมูล")
+    before = {"is_resolved": issue.is_resolved}
+    issue.is_resolved = payload.is_resolved
+    add_audit(
+        session,
+        "resolve_quality_issue" if payload.is_resolved else "reopen_quality_issue",
+        issue.id,
+        before,
+        {"is_resolved": issue.is_resolved, "code": issue.code},
+        entity_type="data_quality_issue",
+    )
+    session.commit()
+    return {"id": issue.id, "is_resolved": issue.is_resolved}
+
+
 @app.get("/api/admin/session")
 def admin_session_status(admin_session: Annotated[str | None, Cookie()] = None) -> dict:
     return {
@@ -412,7 +570,10 @@ def admin_session_status(admin_session: Annotated[str | None, Cookie()] = None) 
 @app.post("/api/admin/login")
 def admin_login(credentials: AdminLogin, response: Response) -> dict:
     if not admin_access_configured():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="ผู้ดูแลยังไม่ได้เปิดใช้หน้าจัดการข้อมูล")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ผู้ดูแลยังไม่ได้เปิดใช้หน้าจัดการข้อมูล",
+        )
     if not verify_password(credentials.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="รหัสผ่านไม่ถูกต้อง")
     response.set_cookie(
@@ -455,6 +616,14 @@ def admin_google_sheet_sources(
         } for config in session.scalars(select(SourceSheetConfig).where(
             SourceSheetConfig.source_id == source.id
         ).order_by(SourceSheetConfig.sheet_name)).all()],
+        "image_bridge": ({
+            "configured": True,
+            "drive_folder_id": source.image_bridge_config.drive_folder_id,
+            "manifest_file_name": source.image_bridge_config.manifest_file_name,
+            "is_active": source.image_bridge_config.is_active,
+            "last_synced_at": source.image_bridge_config.last_synced_at,
+            "last_message": source.image_bridge_config.last_message,
+        } if source.image_bridge_config else {"configured": False}),
     } for source in sources]}
 
 
@@ -474,9 +643,21 @@ def configure_google_sheet_from_web(
         "description": clean_multiline_text(payload.description),
     }
     if not all(values[name] for name in ("source_name", "spreadsheet_id", "sheet_name")):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="กรุณากรอกชื่อแหล่งข้อมูล, Spreadsheet ID และชื่อแท็บ")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="กรุณากรอกชื่อแหล่งข้อมูล, URL/Spreadsheet ID และชื่อแท็บ",
+        )
+    try:
+        values["spreadsheet_id"] = normalise_spreadsheet_id(values["spreadsheet_id"])
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
     existing_source = session.scalar(select(DataSource).where(DataSource.name == values["source_name"]))
-    if existing_source and existing_source.connection_type == "google_sheets" and existing_source.external_id != values["spreadsheet_id"]:
+    source_has_different_spreadsheet = (
+        existing_source
+        and existing_source.connection_type == "google_sheets"
+        and existing_source.external_id != values["spreadsheet_id"]
+    )
+    if source_has_different_spreadsheet:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="ชื่อแหล่งข้อมูลนี้ผูกกับ Spreadsheet ID อื่นอยู่แล้ว กรุณาใช้ชื่อแหล่งข้อมูลใหม่",
@@ -559,6 +740,178 @@ def sync_google_sheets_from_web(
     return {"source_id": source.id, "source_name": source.name, **result}
 
 
+@app.post("/api/admin/sources/{source_id}/clear-central-data")
+def clear_source_central_copy(
+    source_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Remove an imported source's central copy without touching its origin.
+
+    Supports approved Google Sheets and Excel imports. Source configuration,
+    original files, previous sync history, and audit history remain available
+    so the same source can be imported or synced again later.
+    """
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type not in {"google_sheets", "xlsx_import"}:
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูลที่สามารถล้างสำเนากลางได้")
+
+    records = session.scalars(select(Record).where(Record.source_id == source.id)).all()
+    record_count = len(records)
+    issue_count = session.scalar(select(func.count()).select_from(DataQualityIssue).where(
+        DataQualityIssue.source_id == source.id
+    )) or 0
+    for issue in session.scalars(select(DataQualityIssue).where(
+        DataQualityIssue.source_id == source.id
+    )).all():
+        session.delete(issue)
+    session.flush()
+    for record in records:
+        session.delete(record)
+    result = {
+        "source_id": source.id,
+        "source_name": source.name,
+        "connection_type": source.connection_type,
+        "deleted_records": record_count,
+        "deleted_quality_issues": issue_count,
+        "kept": ["ไฟล์ต้นฉบับ", "การตั้งค่าแหล่งข้อมูล", "ประวัติการ sync", "audit log"],
+    }
+    add_audit(session, "clear_central_data", source.id, {
+        "record_count": record_count,
+        "quality_issue_count": issue_count,
+    }, result, entity_type="data_source")
+    session.commit()
+    # Excel's embedded-image cache is the only source-level media directory.
+    # Remove it only after the database deletion has committed successfully.
+    result["deleted_images"] = remove_xlsx_image_cache(source.name) if source.connection_type == "xlsx_import" else 0
+    return result
+
+
+@app.delete("/api/admin/google-sheets/{source_id}")
+def delete_google_sheet_source(
+    source_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Forget an approved Google Sheets connection and its central copy.
+
+    This intentionally never calls Google APIs to change the original
+    spreadsheet. Audit logs are preserved because their entity IDs are stored
+    as plain historical references.
+    """
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type != "google_sheets":
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
+
+    source_name = source.name
+    records = session.scalars(select(Record).where(Record.source_id == source.id)).all()
+    record_count = len(records)
+    issue_count = session.scalar(select(func.count()).select_from(DataQualityIssue).where(
+        DataQualityIssue.source_id == source.id
+    )) or 0
+    sync_count = session.scalar(select(func.count()).select_from(SyncRun).where(
+        SyncRun.source_id == source.id
+    )) or 0
+
+    for issue in session.scalars(select(DataQualityIssue).where(
+        DataQualityIssue.source_id == source.id
+    )).all():
+        session.delete(issue)
+    for record in records:
+        session.delete(record)
+    for sync_run in session.scalars(select(SyncRun).where(SyncRun.source_id == source.id)).all():
+        session.delete(sync_run)
+    for sheet_config in session.scalars(select(SourceSheetConfig).where(
+        SourceSheetConfig.source_id == source.id
+    )).all():
+        session.delete(sheet_config)
+    if source.image_bridge_config:
+        session.delete(source.image_bridge_config)
+
+    result = {
+        "deleted": True,
+        "source_id": source.id,
+        "source_name": source_name,
+        "deleted_records": record_count,
+        "deleted_quality_issues": issue_count,
+        "deleted_sync_history": sync_count,
+        "kept": ["Google Sheets ต้นฉบับ", "audit log"],
+    }
+    add_audit(session, "delete_google_sheet_source", source.id, {
+        "source_name": source_name,
+        "record_count": record_count,
+        "quality_issue_count": issue_count,
+        "sync_run_count": sync_count,
+    }, result, entity_type="data_source")
+    session.delete(source)
+    session.commit()
+    return result
+
+
+@app.put("/api/admin/google-sheets/{source_id}/image-bridge")
+def configure_image_bridge_from_web(
+    source_id: int,
+    payload: ImageBridgeConfigMutation,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Allow-list one Drive folder that contains a Script-owned image manifest."""
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type != "google_sheets":
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
+    folder_id = clean_text(payload.drive_folder_id)
+    manifest_file_name = clean_text(payload.manifest_file_name)
+    if not folder_id or not manifest_file_name or "/" in manifest_file_name or "\\" in manifest_file_name:
+        raise HTTPException(status_code=422, detail="กรุณาระบุ Drive folder ID และชื่อไฟล์ manifest ที่ปลอดภัย")
+    bridge = source.image_bridge_config
+    before = None
+    if bridge is None:
+        bridge = ImageBridgeConfig(
+            source_id=source.id,
+            drive_folder_id=folder_id,
+            manifest_file_name=manifest_file_name,
+            is_active=True,
+        )
+        session.add(bridge)
+    else:
+        before = {"drive_folder_id": bridge.drive_folder_id, "manifest_file_name": bridge.manifest_file_name}
+        bridge.drive_folder_id = folder_id
+        bridge.manifest_file_name = manifest_file_name
+        bridge.is_active = True
+    session.flush()
+    after = {"drive_folder_id": bridge.drive_folder_id, "manifest_file_name": bridge.manifest_file_name}
+    add_audit(session, "configure_image_bridge", bridge.id, before, after, entity_type="image_bridge")
+    session.commit()
+    return {"source_id": source.id, "configured": True, **after}
+
+
+@app.post("/api/admin/google-sheets/{source_id}/image-bridge/sync")
+def sync_image_bridge_from_web(
+    source_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Pull only manifest-listed image files; never exports or writes a Sheet."""
+    require_google_web_sync_configured()
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type != "google_sheets":
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
+    try:
+        result = sync_google_image_bridge(source.name)
+    except GoogleSheetsConfigurationError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="ไม่สามารถดึงคลังภาพจาก Google Drive ได้ โปรดตรวจโฟลเดอร์ที่แชร์และไฟล์ manifest",
+        ) from error
+    add_audit(session, "sync_image_bridge", source.id, None, result, entity_type="image_bridge")
+    session.commit()
+    return {"source_id": source.id, "source_name": source.name, **result}
+
+
 @app.post("/api/admin/records", status_code=status.HTTP_201_CREATED)
 def create_record(
     payload: RecordMutation,
@@ -609,6 +962,150 @@ def update_record(
     session.commit()
     session.refresh(record)
     return record_summary(record)
+
+
+@app.post("/api/admin/records/{record_id}/image")
+async def upload_record_image(
+    record_id: int,
+    image: Annotated[UploadFile, File(description="ภาพ JPEG, PNG, GIF หรือ WebP ขนาดไม่เกิน 10 MB")],
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Store an administrator-approved central image for one existing record."""
+    record = session.get(Record, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="ไม่พบระเบียน")
+    content = await image.read(MAX_IMAGE_UPLOAD_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=422, detail="กรุณาเลือกไฟล์รูปภาพ")
+    if len(content) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="ไฟล์รูปต้องมีขนาดไม่เกิน 10 MB")
+    suffix = uploaded_image_suffix(content)
+    if suffix is None:
+        raise HTTPException(status_code=422, detail="รองรับเฉพาะไฟล์ JPEG, PNG, GIF และ WebP")
+
+    before = {"image_url": record.image_url}
+    image_url = store_central_image(session, record, content, suffix)
+    add_audit(session, "upload_image", record.id, before, {"image_url": image_url})
+    session.commit()
+    return {"record_id": record.id, "image_url": image_url}
+
+
+@app.get("/api/admin/image-intake/sources")
+def image_intake_sources(
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """List only source tabs that have stable IDs suitable for batch image matching."""
+    sources = session.scalars(
+        select(DataSource).where(DataSource.is_active.is_(True)).order_by(DataSource.name)
+    ).all()
+    items = []
+    for source in sources:
+        sheets = session.execute(
+            select(Record.source_sheet, func.count(Record.id))
+            .where(Record.source_id == source.id, Record.source_row_key.like("id-%"))
+            .group_by(Record.source_sheet)
+            .order_by(Record.source_sheet)
+        ).all()
+        if sheets:
+            items.append({
+                "id": source.id,
+                "name": source.name,
+                "sheets": [{"name": sheet_name, "record_count": count} for sheet_name, count in sheets],
+            })
+    return {"sources": items}
+
+
+@app.post("/api/admin/image-intake/{source_id}")
+async def upload_source_images(
+    source_id: int,
+    sheet_name: Annotated[str, Form(min_length=1, max_length=255)],
+    images: Annotated[list[UploadFile], File(description="ชื่อไฟล์ต้องตรงกับ record_id")],
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Match a batch of local image filenames to stable record_id values in one tab.
+
+    The source spreadsheet remains read-only.  Files named e.g. ARC-69-0001.jpg
+    match a record whose source row key is id-ARC-69-0001.
+    """
+    source = session.get(DataSource, source_id)
+    if source is None or not source.is_active:
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูลที่ใช้งานอยู่")
+    if not images:
+        raise HTTPException(status_code=422, detail="กรุณาเลือกไฟล์รูปภาพอย่างน้อย 1 ไฟล์")
+    if len(images) > MAX_IMAGE_BATCH_FILES:
+        raise HTTPException(status_code=413, detail=f"เลือกได้ไม่เกิน {MAX_IMAGE_BATCH_FILES} ไฟล์ต่อครั้ง")
+
+    candidates: list[tuple[str, UploadFile]] = []
+    invalid_files: list[str] = []
+    for image in images:
+        file_name = (image.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+        stable_id = clean_text(Path(file_name).stem)
+        if not stable_id:
+            invalid_files.append(file_name or "ไฟล์ไม่มีชื่อ")
+            continue
+        candidates.append((stable_id, image))
+
+    duplicate_ids = {stable_id for stable_id, count in Counter(item[0] for item in candidates).items() if count > 1}
+    candidates = [item for item in candidates if item[0] not in duplicate_ids]
+    invalid_files.extend(f"{stable_id} (ชื่อไฟล์ซ้ำในชุดที่เลือก)" for stable_id in sorted(duplicate_ids))
+
+    record_keys = [f"id-{stable_id}" for stable_id, _ in candidates]
+    records = session.scalars(
+        select(Record).where(
+            Record.source_id == source.id,
+            Record.source_sheet == sheet_name,
+            Record.source_row_key.in_(record_keys),
+        )
+    ).all()
+    records_by_stable_id = {record.source_row_key.removeprefix("id-"): record for record in records}
+
+    unmatched: list[str] = []
+    uploaded = 0
+    total_bytes = 0
+    for stable_id, image in candidates:
+        record = records_by_stable_id.get(stable_id)
+        if record is None:
+            unmatched.append(stable_id)
+            continue
+        content = await image.read(MAX_IMAGE_UPLOAD_BYTES + 1)
+        if not content:
+            invalid_files.append(f"{stable_id} (ไฟล์ว่าง)")
+            continue
+        if len(content) > MAX_IMAGE_UPLOAD_BYTES:
+            invalid_files.append(f"{stable_id} (เกิน 10 MB)")
+            continue
+        if total_bytes + len(content) > MAX_IMAGE_BATCH_BYTES:
+            invalid_files.append(f"{stable_id} (เกินขนาดรวม {MAX_IMAGE_BATCH_BYTES // 1024 // 1024} MB ต่อครั้ง)")
+            continue
+        suffix = uploaded_image_suffix(content)
+        if suffix is None:
+            invalid_files.append(f"{stable_id} (ไม่ใช่ JPEG, PNG, GIF หรือ WebP)")
+            continue
+        before = {"image_url": record.image_url}
+        image_url = store_central_image(session, record, content, suffix)
+        add_audit(
+            session,
+            "batch_upload_image",
+            record.id,
+            before,
+            {"image_url": image_url, "matched_record_id": stable_id},
+        )
+        uploaded += 1
+        total_bytes += len(content)
+
+    session.commit()
+    return {
+        "source_name": source.name,
+        "sheet_name": sheet_name,
+        "uploaded": uploaded,
+        "unmatched": unmatched[:20],
+        "unmatched_count": len(unmatched),
+        "invalid_files": invalid_files[:20],
+        "invalid_count": len(invalid_files),
+    }
 
 
 @app.delete("/api/admin/records/{record_id}")

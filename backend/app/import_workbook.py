@@ -26,7 +26,7 @@ FIELD_ALIASES = {
     "material": ("ชนิด",),
     "period": ("อายุสมัย",),
     "provenance": ("ประวัติที่มา",),
-    "image_url": ("รูปภาพ",),
+    "image_url": ("รูปภาพ", "image_url", "ลิงก์รูปภาพ", "URL รูปภาพ"),
     "status_data_check": ("การตรวจสอบข้อมูล",),
     "status_photographed": ("การถ่ายภาพแล้ว",),
     "status_antique": ("การลงระบบ Antique",),
@@ -186,6 +186,15 @@ def sync_tabular_sheets(
                     Record.source_sheet == sheet.name,
                     Record.source_row_key == f"row-{row_number}",
                 ))
+            # A central image uploaded by an administrator is retained when
+            # the source sheet itself has no image URL. This lets Google Sheets
+            # remain a metadata source while the system builds an image corpus
+            # for later AI search.
+            if record is not None and not payload["image_url"]:
+                manual_image_url = clean_text((record.raw_data or {}).get("_manual_image_url"))
+                if manual_image_url:
+                    payload["image_url"] = manual_image_url
+                    raw_data["_manual_image_url"] = manual_image_url
             if record is not None and record.raw_hash == raw_hash:
                 run.rows_skipped += 1
                 # The content can be unchanged even when staff sorted the
@@ -332,14 +341,22 @@ def import_xlsx(path: str, source_name: str = "บัญชีเดินทุ
             )
             for worksheet in workbook.worksheets
         ]
+        ambiguous_image_count = sum(
+            len(rows) for rows in embedded_images.duplicate_rows_by_sheet.values()
+        )
+        import_message = (
+            f"Imported from {workbook_path.name}; "
+            f"embedded images exported: {embedded_images.exported_count}; "
+            f"ambiguous rows: {ambiguous_image_count}"
+        )
         result = sync_tabular_sheets(
             session,
             source,
             sheets,
-            f"Imported from {workbook_path.name}; embedded images exported: {embedded_images.exported_count}; ambiguous rows: {sum(len(rows) for rows in embedded_images.duplicate_rows_by_sheet.values())}",
+            import_message,
         )
         result["embedded_images_exported"] = embedded_images.exported_count
-        result["embedded_images_ambiguous"] = sum(len(rows) for rows in embedded_images.duplicate_rows_by_sheet.values())
+        result["embedded_images_ambiguous"] = ambiguous_image_count
         session.commit()
         return result
     except Exception as error:

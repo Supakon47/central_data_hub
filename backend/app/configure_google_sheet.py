@@ -6,7 +6,7 @@ import json
 from sqlalchemy import select
 
 from .database import Base, SessionLocal, engine
-from .google_sheets import GoogleSheetSource
+from .google_sheets import GoogleSheetSource, normalise_spreadsheet_id
 from .models import DataSource, SourceSheetConfig
 
 
@@ -24,6 +24,7 @@ def configure_google_sheet(
     """Create or update an allow-listed source without reading Google data."""
     if not source_name.strip() or not spreadsheet_id.strip() or not sheet_name.strip():
         raise ValueError("ต้องระบุ source name, spreadsheet ID และชื่อชีต")
+    spreadsheet_id = normalise_spreadsheet_id(spreadsheet_id)
     GoogleSheetSource(spreadsheet_id, sheet_name, read_range).a1_range
     if header_row_number != 1:
         raise ValueError("MVP ปัจจุบันรองรับหัวตารางที่แถวแรกของ range เท่านั้น (--header-row 1)")

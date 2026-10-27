@@ -3,6 +3,11 @@ from urllib.parse import urlparse
 from urllib.parse import parse_qs
 
 
+GOOGLE_SHEETS_IMAGE_FORMULA = re.compile(
+    r'^\s*=\s*IMAGE\s*\(\s*"((?:[^"]|"")*)"', re.IGNORECASE
+)
+
+
 def clean_text(value: object | None) -> str | None:
     if value is None:
         return None
@@ -37,6 +42,11 @@ def normalise_image_url(value: object | None) -> str | None:
     needs sharing permissions that allow the logged-in viewer to open it.
     """
     url = clean_text(value)
+    if url and url.startswith("/media/"):
+        parsed = urlparse(url)
+        parts = [part for part in parsed.path.split("/") if part]
+        if not parsed.query and not parsed.fragment and ".." not in parts:
+            return parsed.path
     if not is_http_url(url):
         return None
     parsed = urlparse(url)
@@ -46,3 +56,19 @@ def normalise_image_url(value: object | None) -> str | None:
         if file_id:
             return f"https://drive.google.com/uc?export=view&id={file_id}"
     return url
+
+
+def image_url_from_google_sheets_formula(value: object | None) -> str | None:
+    """Extract a usable URL from a Google Sheets ``=IMAGE(\"URL\")`` formula.
+
+    The Sheets values API does not expose pixels from inserted image objects.
+    Reading the formula view is safe and lets the import retain the original
+    formatted values for all non-image fields.
+    """
+    formula = clean_text(value)
+    if not formula:
+        return None
+    match = GOOGLE_SHEETS_IMAGE_FORMULA.match(formula)
+    if not match:
+        return None
+    return normalise_image_url(match.group(1).replace('""', '"'))
