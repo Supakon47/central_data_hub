@@ -1,4 +1,5 @@
 from collections import Counter
+import asyncio
 from datetime import datetime
 import hashlib
 import json
@@ -19,18 +20,26 @@ from .config import (
     ADMIN_SESSION_TTL_SECONDS,
     APP_ENV,
     APP_NAME,
+    AUTO_SYNC_POLL_SECONDS,
     FRONTEND_DIR,
     GOOGLE_SERVICE_ACCOUNT_FILE,
     GOOGLE_SERVICE_ACCOUNT_JSON,
+    GOOGLE_SHEETS_AUTO_SYNC_ENABLED,
     GOOGLE_SHEETS_ENABLED,
     GOOGLE_SHEETS_WEB_SYNC_ENABLED,
     IMAGE_STORAGE_DIR,
     PAGE_SIZE_DEFAULT,
     PAGE_SIZE_MAX,
 )
+from .automatic_sync import automatic_sync_loop
 from .configure_google_sheet import configure_google_sheet
 from .database import Base, engine, get_session
-from .google_sheets import GoogleSheetsConfigurationError, normalise_spreadsheet_id
+from .google_sheets import (
+    GoogleSheetsConfigurationError,
+    normalise_drive_folder_id,
+    normalise_spreadsheet_id,
+)
+from .inspect_google_image_bridge import inspect_google_image_bridge
 from .models import AuditLog, DataQualityIssue, DataSource, ImageBridgeConfig, Record, SourceSheetConfig, SyncRun
 from .normalization import clean_multiline_text, clean_text, normalise_image_url
 from .record_images import image_summary, store_record_image, uploaded_image_suffix
@@ -56,6 +65,12 @@ CREATE_REQUIRED_FIELDS = {
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BATCH_FILES = 100
 MAX_IMAGE_BATCH_BYTES = 100 * 1024 * 1024
+ATTENTION_STATUS_FIELDS = {
+    "data_check": (Record.status_data_check, "ตรวจสอบแล้ว"),
+    "photographed": (Record.status_photographed, "ถ่ายภาพแล้ว"),
+    "antique": (Record.status_antique, "ลงระบบแล้ว"),
+    "storage": (Record.status_storage, "ส่งขึ้นห้องคลังแล้ว"),
+}
 
 
 class AdminLogin(BaseModel):
@@ -101,6 +116,14 @@ class ImageBridgeConfigMutation(BaseModel):
     manifest_file_name: str = Field(default="central-data-hub-images.json", min_length=1, max_length=255)
 
 
+class SyncScheduleMutation(BaseModel):
+    """A missing interval means manual sync only for this source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sync_frequency_minutes: int | None = Field(default=None, ge=5, le=10080)
+
+
 class DataQualityIssueResolution(BaseModel):
     """A deliberate staff acknowledgement; source data is never edited here."""
 
@@ -117,8 +140,22 @@ async def disable_asset_cache_in_demo(request: Request, call_next):
 
 
 @app.on_event("startup")
-def initialise_database() -> None:
+async def initialise_database() -> None:
     Base.metadata.create_all(bind=engine)
+    app.state.auto_sync_task = None
+    if automatic_sync_available():
+        app.state.auto_sync_task = asyncio.create_task(automatic_sync_loop(AUTO_SYNC_POLL_SECONDS))
+
+
+@app.on_event("shutdown")
+async def stop_automatic_sync() -> None:
+    task = getattr(app.state, "auto_sync_task", None)
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def require_admin(admin_session: Annotated[str | None, Cookie()] = None) -> None:
@@ -161,6 +198,15 @@ def require_google_web_sync_configured() -> None:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="ยังไม่ได้ตั้งค่า service account สำหรับการ sync บนเว็บ",
         )
+
+
+def automatic_sync_available() -> bool:
+    """Only start automatic work when both credentials and the explicit switch exist."""
+    return (
+        GOOGLE_SHEETS_AUTO_SYNC_ENABLED
+        and GOOGLE_SHEETS_ENABLED
+        and bool(GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_SERVICE_ACCOUNT_JSON)
+    )
 
 
 def editable_snapshot(record: Record) -> dict:
@@ -262,6 +308,8 @@ def health() -> dict:
             and GOOGLE_SHEETS_ENABLED
             and bool(GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_SERVICE_ACCOUNT_JSON)
         ),
+        "google_sheets_auto_sync_enabled": GOOGLE_SHEETS_AUTO_SYNC_ENABLED,
+        "google_sheets_auto_sync_available": automatic_sync_available(),
     }
 
 
@@ -275,6 +323,7 @@ def list_records(
     status_photographed: str | None = None,
     status_antique: str | None = None,
     status_storage: str | None = None,
+    attention: str | None = Query(default=None, pattern="^(data_check|photographed|antique|storage)$"),
     has_description: bool | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=PAGE_SIZE_DEFAULT, ge=1, le=PAGE_SIZE_MAX),
@@ -300,6 +349,9 @@ def list_records(
     ]:
         if value is not None:
             statement = statement.where(column == value)
+    if attention:
+        status_field, completed_status = ATTENTION_STATUS_FIELDS[attention]
+        statement = statement.where(or_(status_field.is_(None), status_field != completed_status))
     if has_description is True:
         statement = statement.where(Record.title_description.is_not(None))
     if has_description is False:
@@ -342,10 +394,16 @@ def get_record(record_id: int, session: Annotated[Session, Depends(get_session)]
 
 
 @app.get("/api/dashboard")
-def dashboard(session: Annotated[Session, Depends(get_session)], source_id: int | None = None) -> dict:
+def dashboard(
+    session: Annotated[Session, Depends(get_session)],
+    source_id: int | None = None,
+    source_sheet: str | None = None,
+) -> dict:
     statement = select(Record)
     if source_id:
         statement = statement.where(Record.source_id == source_id)
+    if source_sheet:
+        statement = statement.where(Record.source_sheet == source_sheet)
     records = session.scalars(statement).all()
     registration_counts = Counter(record.registration_no for record in records if record.registration_no)
     duplicate_registration_counts = {
@@ -356,6 +414,9 @@ def dashboard(session: Annotated[Session, Depends(get_session)], source_id: int 
         counts = Counter(getattr(record, field) or "ไม่ระบุ" for record in records)
         return [{"label": label, "count": count} for label, count in counts.most_common()]
 
+    def pending_count(field: str, completed_status: str) -> int:
+        return sum((getattr(record, field) or "").strip() != completed_status for record in records)
+
     return {
         "total_records": len(records),
         "with_registration_no": sum(bool(record.registration_no) for record in records),
@@ -363,6 +424,12 @@ def dashboard(session: Annotated[Session, Depends(get_session)], source_id: int 
         "with_image_url": sum(bool(record.image_url) for record in records),
         "duplicate_registration_groups": len(duplicate_registration_counts),
         "records_in_duplicate_registration_groups": sum(duplicate_registration_counts.values()),
+        "follow_up": {
+            "data_check": pending_count("status_data_check", "ตรวจสอบแล้ว"),
+            "photographed": pending_count("status_photographed", "ถ่ายภาพแล้ว"),
+            "antique": pending_count("status_antique", "ลงระบบแล้ว"),
+            "storage": pending_count("status_storage", "ส่งขึ้นห้องคลังแล้ว"),
+        },
         "by_source_sheet": counter("source_sheet"),
         "by_data_check": counter("status_data_check"),
         "by_photo": counter("status_photographed"),
@@ -375,6 +442,7 @@ def dashboard(session: Annotated[Session, Depends(get_session)], source_id: int 
 def duplicate_registration_groups(
     session: Annotated[Session, Depends(get_session)],
     source_id: int | None = None,
+    source_sheet: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict:
     """Return exact duplicate registration numbers for staff review, not automatic merging."""
@@ -384,6 +452,8 @@ def duplicate_registration_groups(
     )
     if source_id:
         grouped_statement = grouped_statement.where(Record.source_id == source_id)
+    if source_sheet:
+        grouped_statement = grouped_statement.where(Record.source_sheet == source_sheet)
     grouped_statement = grouped_statement.group_by(Record.registration_no).having(func.count(Record.id) > 1)
     total_groups = session.scalar(select(func.count()).select_from(grouped_statement.subquery())) or 0
     grouped = session.execute(
@@ -395,6 +465,8 @@ def duplicate_registration_groups(
         record_statement = select(Record).join(Record.source).where(Record.registration_no.in_(registration_numbers))
         if source_id:
             record_statement = record_statement.where(Record.source_id == source_id)
+        if source_sheet:
+            record_statement = record_statement.where(Record.source_sheet == source_sheet)
         ordered_records = record_statement.order_by(
             Record.registration_no,
             Record.source_sheet,
@@ -609,6 +681,7 @@ def admin_google_sheet_sources(
         "owner_name": source.owner_name,
         "description": source.description,
         "is_active": source.is_active,
+        "sync_frequency_minutes": source.sync_frequency_minutes,
         "sheets": [{
             "name": config.sheet_name,
             "read_range": config.read_range,
@@ -625,6 +698,30 @@ def admin_google_sheet_sources(
             "last_message": source.image_bridge_config.last_message,
         } if source.image_bridge_config else {"configured": False}),
     } for source in sources]}
+
+
+@app.put("/api/admin/google-sheets/{source_id}/sync-schedule")
+def update_google_sheet_sync_schedule(
+    source_id: int,
+    payload: SyncScheduleMutation,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Set a source-specific interval; the server-wide automatic switch stays separate."""
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type != "google_sheets":
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
+    before = {"sync_frequency_minutes": source.sync_frequency_minutes}
+    source.sync_frequency_minutes = payload.sync_frequency_minutes
+    after = {"sync_frequency_minutes": source.sync_frequency_minutes}
+    add_audit(session, "update_google_sheet_sync_schedule", source.id, before, after, entity_type="data_source")
+    session.commit()
+    return {
+        "source_id": source.id,
+        "source_name": source.name,
+        "sync_frequency_minutes": source.sync_frequency_minutes,
+        "automatic_sync_server_enabled": automatic_sync_available(),
+    }
 
 
 @app.post("/api/admin/google-sheets")
@@ -859,10 +956,14 @@ def configure_image_bridge_from_web(
     source = session.get(DataSource, source_id)
     if source is None or source.connection_type != "google_sheets":
         raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
-    folder_id = clean_text(payload.drive_folder_id)
+    folder_value = clean_text(payload.drive_folder_id)
     manifest_file_name = clean_text(payload.manifest_file_name)
-    if not folder_id or not manifest_file_name or "/" in manifest_file_name or "\\" in manifest_file_name:
-        raise HTTPException(status_code=422, detail="กรุณาระบุ Drive folder ID และชื่อไฟล์ manifest ที่ปลอดภัย")
+    if not folder_value or not manifest_file_name or "/" in manifest_file_name or "\\" in manifest_file_name:
+        raise HTTPException(status_code=422, detail="กรุณาระบุ Drive folder URL/ID และชื่อไฟล์ manifest ที่ปลอดภัย")
+    try:
+        folder_id = normalise_drive_folder_id(folder_value)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     bridge = source.image_bridge_config
     before = None
     if bridge is None:
@@ -883,6 +984,55 @@ def configure_image_bridge_from_web(
     add_audit(session, "configure_image_bridge", bridge.id, before, after, entity_type="image_bridge")
     session.commit()
     return {"source_id": source.id, "configured": True, **after}
+
+
+@app.post("/api/admin/google-sheets/{source_id}/image-bridge/inspect")
+def inspect_image_bridge_from_web(
+    source_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Read-only check that the service account can see a Bridge folder."""
+    require_google_web_sync_configured()
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type != "google_sheets":
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
+    try:
+        return inspect_google_image_bridge(source.name)
+    except GoogleSheetsConfigurationError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="ไม่สามารถตรวจสอบ Image Bridge ได้ โปรดตรวจสิทธิ์การแชร์โฟลเดอร์ Google Drive",
+        ) from error
+
+
+@app.post("/api/admin/google-sheets/{source_id}/image-bridge/preview")
+def preview_image_bridge_from_web(
+    source_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Read and match Bridge contents without changing central image records."""
+    require_google_web_sync_configured()
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type != "google_sheets":
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
+    try:
+        result = sync_google_image_bridge(source.name, dry_run=True)
+    except GoogleSheetsConfigurationError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="ไม่สามารถทดลองดึงรูปจาก Image Bridge ได้ โปรดตรวจโฟลเดอร์และ manifest",
+        ) from error
+    return {"source_id": source.id, "source_name": source.name, **result}
 
 
 @app.post("/api/admin/google-sheets/{source_id}/image-bridge/sync")
@@ -910,6 +1060,41 @@ def sync_image_bridge_from_web(
     add_audit(session, "sync_image_bridge", source.id, None, result, entity_type="image_bridge")
     session.commit()
     return {"source_id": source.id, "source_name": source.name, **result}
+
+
+@app.delete("/api/admin/google-sheets/{source_id}/image-bridge")
+def disconnect_image_bridge_from_web(
+    source_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Forget one Bridge configuration without deleting records or their images."""
+    source = session.get(DataSource, source_id)
+    if source is None or source.connection_type != "google_sheets":
+        raise HTTPException(status_code=404, detail="ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
+    bridge = source.image_bridge_config
+    if bridge is None:
+        raise HTTPException(status_code=404, detail="แหล่งข้อมูลนี้ยังไม่ได้ตั้งค่า Image Bridge")
+    bridge_id = bridge.id
+    before = {
+        "drive_folder_id": bridge.drive_folder_id,
+        "manifest_file_name": bridge.manifest_file_name,
+    }
+    session.delete(bridge)
+    add_audit(
+        session,
+        "disconnect_image_bridge",
+        bridge_id,
+        before,
+        {"source_id": source.id, "kept": ["ข้อมูลกลาง", "รูปภาพที่ดึงมาแล้ว", "Google Drive ต้นทาง"]},
+        entity_type="image_bridge",
+    )
+    session.commit()
+    return {
+        "source_id": source.id,
+        "disconnected": True,
+        "kept": ["ข้อมูลกลาง", "รูปภาพที่ดึงมาแล้ว", "Google Drive ต้นทาง"],
+    }
 
 
 @app.post("/api/admin/records", status_code=status.HTTP_201_CREATED)

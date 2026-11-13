@@ -27,6 +27,8 @@ GOOGLE_SHEETS_ENABLED = env_flag("GOOGLE_SHEETS_ENABLED")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
 GOOGLE_SHEETS_WEB_SYNC_ENABLED = env_flag("GOOGLE_SHEETS_WEB_SYNC_ENABLED")
+GOOGLE_SHEETS_AUTO_SYNC_ENABLED = env_flag("GOOGLE_SHEETS_AUTO_SYNC_ENABLED")
+AUTO_SYNC_POLL_SECONDS = max(30, int(os.getenv("AUTO_SYNC_POLL_SECONDS", "60")))
 
 # Local administrator access. Keep these in .env (which is gitignored), never
 # in source control. The password value is a one-way PBKDF2 hash.

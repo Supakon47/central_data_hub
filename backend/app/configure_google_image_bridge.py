@@ -6,6 +6,7 @@ import json
 from sqlalchemy import select
 
 from .database import Base, SessionLocal, engine
+from .google_sheets import normalise_drive_folder_id
 from .models import DataSource, ImageBridgeConfig
 
 
@@ -21,20 +22,21 @@ def configure_google_image_bridge(
         if source is None or source.connection_type != "google_sheets":
             raise ValueError("ไม่พบแหล่งข้อมูล Google Sheets ที่ได้รับอนุมัติ")
         if not drive_folder_id.strip() or not manifest_file_name.strip():
-            raise ValueError("ต้องระบุ Drive folder ID และชื่อไฟล์ manifest")
+            raise ValueError("ต้องระบุ Drive folder URL/ID และชื่อไฟล์ manifest")
         if "/" in manifest_file_name or "\\" in manifest_file_name:
             raise ValueError("ชื่อไฟล์ manifest ต้องไม่มี / หรือ \\")
+        folder_id = normalise_drive_folder_id(drive_folder_id)
         config = session.scalar(select(ImageBridgeConfig).where(ImageBridgeConfig.source_id == source.id))
         if config is None:
             config = ImageBridgeConfig(
                 source_id=source.id,
-                drive_folder_id=drive_folder_id.strip(),
+                drive_folder_id=folder_id,
                 manifest_file_name=manifest_file_name.strip(),
                 is_active=True,
             )
             session.add(config)
         else:
-            config.drive_folder_id = drive_folder_id.strip()
+            config.drive_folder_id = folder_id
             config.manifest_file_name = manifest_file_name.strip()
             config.is_active = True
         session.commit()

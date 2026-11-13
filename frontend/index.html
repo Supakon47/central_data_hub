@@ -4,15 +4,27 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Central Data Hub</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20261021-1" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261113-1" />
   </head>
   <body>
     <header class="topbar">
       <div>
-        <p class="eyebrow">DEMO · central data copy</p>
+        <p class="eyebrow">DEMO · central data </p>
         <h1>ศูนย์รวมข้อมูล</h1>
       </div>
-      <p id="freshness">กำลังตรวจสถานะระบบ…</p>
+      <div class="topbar-actions">
+        <p id="freshness">กำลังตรวจสถานะระบบ…</p>
+        <button
+          id="theme-toggle"
+          class="theme-toggle"
+          type="button"
+          aria-label="เปิดโหมดมืด"
+          title="เปิดโหมดมืด"
+        >
+          <span aria-hidden="true">☾</span>
+          <span class="theme-toggle-label">โหมดมืด</span>
+        </button>
+      </div>
     </header>
 
     <nav class="tabs" aria-label="หน้าหลัก">
@@ -80,36 +92,91 @@
       </section>
 
       <section id="dashboard" class="view">
-        <div class="section-heading">
+        <div class="section-heading dashboard-heading">
           <div>
-            <h2>Dashboard</h2>
+            <p class="eyebrow">CENTRAL DATA OVERVIEW</p>
+            <h2>ภาพรวมข้อมูล</h2>
             <p>
-              ตัวเลขจากข้อมูลที่นำเข้าแล้ว ไม่ใช่สถานะของ Google Sheets แบบ
-              real-time
+              สรุปจากข้อมูลที่นำเข้าแล้ว เพื่อช่วยติดตามปริมาณข้อมูลและขั้นตอนงาน
             </p>
           </div>
+          <div class="dashboard-updated">
+            <span>สถานะข้อมูล</span>
+            <strong id="dashboard-status">กำลังโหลด…</strong>
+          </div>
         </div>
-        <div id="metrics" class="metrics"></div>
-        <div class="chart-grid">
-          <article class="panel">
+        <form id="dashboard-filter-form" class="dashboard-filters">
+          <label>แหล่งข้อมูล
+            <select id="dashboard-source-filter">
+              <option value="">ทุกแหล่งข้อมูล</option>
+            </select>
+          </label>
+          <label>ชีตต้นทาง
+            <select id="dashboard-sheet-filter" disabled>
+              <option value="">ทุกชีต</option>
+            </select>
+          </label>
+          <div class="dashboard-filter-actions">
+            <button type="submit">แสดงข้อมูล</button>
+            <button id="dashboard-filter-reset" class="secondary" type="button">ล้างตัวกรอง</button>
+          </div>
+        </form>
+        <section class="dashboard-follow-up" aria-labelledby="follow-up-heading">
+          <div class="dashboard-follow-up-heading">
+            <div>
+              <h3 id="follow-up-heading">รายการที่ต้องติดตาม</h3>
+              <p>กดเพื่อเปิดระเบียนที่ยังทำงานไม่ครบตามสถานะ</p>
+            </div>
+            <span>อิงตามขอบเขตที่เลือกด้านบน</span>
+          </div>
+          <div id="follow-up-list" class="follow-up-list"></div>
+        </section>
+        <div id="metrics" class="metrics dashboard-metrics"></div>
+        <div class="dashboard-grid">
+          <article class="panel dashboard-panel dashboard-panel-sheets">
             <h3>จำนวนระเบียนตามชีต</h3>
+            <p class="panel-description">เปรียบเทียบปริมาณข้อมูลของแต่ละทะเบียน</p>
             <div id="chart-sheets"></div>
           </article>
-          <article class="panel">
+          <article class="panel dashboard-panel">
             <h3>การตรวจสอบข้อมูล</h3>
+            <p class="panel-description">สถานะการตรวจสอบที่บันทึกไว้ในแต่ละระเบียน</p>
             <div id="chart-check"></div>
           </article>
-          <article class="panel">
-            <h3>การถ่ายภาพ</h3>
-            <div id="chart-photo"></div>
+          <article class="panel dashboard-panel dashboard-panel-process">
+            <div>
+              <h3>ความคืบหน้าการดำเนินงาน</h3>
+              <p class="panel-description">ติดตามสถานะงานสำคัญจากข้อมูลกลาง</p>
+            </div>
+            <div class="process-grid">
+              <section class="process-card">
+                <h4>การถ่ายภาพ</h4>
+                <div id="chart-photo"></div>
+              </section>
+              <section class="process-card">
+                <h4>การลงระบบ Antique</h4>
+                <div id="chart-antique"></div>
+              </section>
+              <section class="process-card">
+                <h4>การส่งขึ้นห้องคลัง</h4>
+                <div id="chart-storage"></div>
+              </section>
+            </div>
           </article>
-          <article class="panel">
-            <h3>การลงระบบ Antique</h3>
-            <div id="chart-antique"></div>
-          </article>
-          <article class="panel">
-            <h3>การส่งขึ้นห้องคลัง</h3>
-            <div id="chart-storage"></div>
+          <article class="panel dashboard-panel dashboard-panel-table">
+            <div class="panel-title-row">
+              <div>
+                <h3>สรุปตามชีตต้นทาง</h3>
+                <p class="panel-description">ชีตที่มีจำนวนระเบียนสูงสุด</p>
+              </div>
+              <button id="open-explorer" class="secondary small" type="button">เปิด Data Explorer</button>
+            </div>
+            <div class="table-wrap dashboard-table-wrap">
+              <table class="dashboard-table">
+                <thead><tr><th>ชีตต้นทาง</th><th>จำนวนระเบียน</th><th>สัดส่วน</th></tr></thead>
+                <tbody id="dashboard-source-table"></tbody>
+              </table>
+            </div>
           </article>
         </div>
         <article id="duplicate-panel" class="panel duplicate-panel" hidden>
@@ -397,6 +464,6 @@
         <div id="detail-content"></div>
       </section>
     </main>
-    <script src="/assets/app.js?v=20261021-1"></script>
+    <script src="/assets/app.js?v=20261113-1"></script>
   </body>
 </html>

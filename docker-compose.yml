@@ -1,6 +1,7 @@
 services:
   db:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: central_data_hub
       POSTGRES_USER: central_data_hub
@@ -23,6 +24,8 @@ services:
       DATABASE_URL: postgresql+psycopg://central_data_hub:change-this-before-use@db:5432/central_data_hub
       APP_ENV: development
       GOOGLE_SHEETS_ENABLED: ${GOOGLE_SHEETS_ENABLED:-false}
+      GOOGLE_SHEETS_AUTO_SYNC_ENABLED: ${GOOGLE_SHEETS_AUTO_SYNC_ENABLED:-false}
+      AUTO_SYNC_POLL_SECONDS: ${AUTO_SYNC_POLL_SECONDS:-60}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
       GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-}
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
@@ -31,6 +34,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:

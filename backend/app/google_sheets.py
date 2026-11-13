@@ -22,6 +22,8 @@ XLSX_EXPORT_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadshe
 RANGE_PATTERN = re.compile(r"^[A-Za-z0-9:$]+$")
 SPREADSHEET_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{20,}$")
 SPREADSHEET_URL_PATTERN = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)(?:/|$)")
+DRIVE_FOLDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{10,}$")
+DRIVE_FOLDER_URL_PATTERN = re.compile(r"/folders/([A-Za-z0-9_-]+)(?:[/?#]|$)")
 
 
 class GoogleSheetsConfigurationError(RuntimeError):
@@ -38,6 +40,20 @@ def normalise_spreadsheet_id(value: str) -> str:
         raise ValueError(
             "กรุณาวาง URL ของ Google Sheets หรือ Spreadsheet ID ที่ถูกต้อง "
             "(URL ต้องมีส่วน /spreadsheets/d/<ID>/)"
+        )
+    return candidate
+
+
+def normalise_drive_folder_id(value: str) -> str:
+    """Accept a Google Drive folder URL or ID, and return only its safe ID."""
+    candidate = value.strip()
+    url_match = DRIVE_FOLDER_URL_PATTERN.search(candidate)
+    if url_match:
+        candidate = url_match.group(1)
+    if not DRIVE_FOLDER_ID_PATTERN.fullmatch(candidate):
+        raise ValueError(
+            "กรุณาวาง URL ของโฟลเดอร์ Google Drive หรือ Folder ID ที่ถูกต้อง "
+            "(URL ต้องมีส่วน /folders/<ID>)"
         )
     return candidate
 

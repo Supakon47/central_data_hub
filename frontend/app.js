@@ -1,4 +1,13 @@
-const BUILD_VERSION = "2026.10.27.1";
+const BUILD_VERSION = "2026.11.13.1";
+const THEME_STORAGE_KEY = "central-data-hub-theme";
+const SYNC_SCHEDULE_OPTIONS = [
+  ["", "ซิงก์ด้วยมือเท่านั้น"],
+  ["15", "ทุก 15 นาที"],
+  ["30", "ทุก 30 นาที"],
+  ["60", "ทุก 1 ชั่วโมง"],
+  ["360", "ทุก 6 ชั่วโมง"],
+  ["1440", "ทุก 1 วัน"],
+];
 const state = {
   page: 1,
   pageSize: 25,
@@ -6,8 +15,39 @@ const state = {
   lastItems: [],
   currentDetailId: null,
   imageIntakeSources: [],
+  dashboardSources: [],
+  dashboardSheetsBySource: new Map(),
+  explorerSourceId: "",
+  explorerAttention: "",
+  explorerContextLabel: "",
 };
 const $ = (selector) => document.querySelector(selector);
+
+function applyTheme(theme) {
+  const isDark = theme === "dark";
+  document.documentElement.dataset.theme = isDark ? "dark" : "light";
+  const button = $("#theme-toggle");
+  button.querySelector("[aria-hidden]").textContent = isDark ? "☀" : "☾";
+  button.querySelector(".theme-toggle-label").textContent = isDark
+    ? "โหมดสว่าง"
+    : "โหมดมืด";
+  const label = isDark ? "เปิดโหมดสว่าง" : "เปิดโหมดมืด";
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+
+function initialiseTheme() {
+  const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+  const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+  applyTheme(savedTheme || preferredTheme);
+  $("#theme-toggle").addEventListener("click", () => {
+    const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+    applyTheme(nextTheme);
+  });
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replace(
@@ -71,6 +111,96 @@ function renderMetric(label, value) {
     <span class="label">${label}</span>
     <span class="number">${value.toLocaleString()}</span>
   </article>`;
+}
+
+function percentOf(value, total) {
+  if (!total) return "0%";
+  return `${Math.round((value / total) * 100).toLocaleString()}%`;
+}
+
+function renderDashboardMetric(label, value, note = "") {
+  if (label === "ทะเบียนที่ซ้ำทั้งหมด") {
+    return `<button id="toggle-duplicates" class="metric metric-button dashboard-metric" type="button" aria-expanded="false">
+      <span class="label">${label}</span>
+      <span class="number">${value.toLocaleString()}</span>
+      <span class="metric-action">กดเพื่อดูรายการที่ซ้ำ</span>
+    </button>`;
+  }
+  return `<article class="metric dashboard-metric">
+    <span class="label">${label}</span>
+    <span class="number">${value.toLocaleString()}</span>
+    <span class="dashboard-metric-note">${escapeHtml(note)}</span>
+  </article>`;
+}
+
+function renderDashboardSourceTable(items, total) {
+  const target = $("#dashboard-source-table");
+  target.innerHTML = items.length
+    ? items.slice(0, 8).map((item) => `<tr>
+      <td title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</td>
+      <td>${item.count.toLocaleString()}</td>
+      <td><span class="table-progress"><span style="width:${percentOf(item.count, total)}"></span></span>${percentOf(item.count, total)}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="3" class="muted">ยังไม่มีข้อมูล</td></tr>`;
+}
+
+const FOLLOW_UP_ITEMS = [
+  ["data_check", "ต้องตรวจสอบข้อมูล", "ยังไม่อยู่ในสถานะตรวจสอบแล้ว"],
+  ["photographed", "ต้องติดตามการถ่ายภาพ", "ยังไม่อยู่ในสถานะถ่ายภาพแล้ว"],
+  ["antique", "ต้องลงระบบ Antique", "ยังไม่อยู่ในสถานะลงระบบแล้ว"],
+  ["storage", "ต้องส่งขึ้นห้องคลัง", "ยังไม่อยู่ในสถานะส่งขึ้นห้องคลังแล้ว"],
+];
+
+function renderFollowUp(data) {
+  const cards = FOLLOW_UP_ITEMS.map(([key, label, description]) => {
+    const count = data.follow_up?.[key] || 0;
+    return `<button class="follow-up-card" type="button" data-follow-up="${key}">
+      <span class="follow-up-label">${label}</span>
+      <strong>${count.toLocaleString()}</strong>
+      <span class="follow-up-description">${description}</span>
+      <span class="follow-up-action">ดูระเบียน →</span>
+    </button>`;
+  });
+  cards.push(`<button class="follow-up-card follow-up-duplicates" type="button" data-follow-up="duplicates">
+    <span class="follow-up-label">ทะเบียนที่ซ้ำ</span>
+    <strong>${data.duplicate_registration_groups.toLocaleString()}</strong>
+    <span class="follow-up-description">กลุ่มเลขทะเบียนที่ควรตรวจสอบ</span>
+    <span class="follow-up-action">ดูรายการ →</span>
+  </button>`);
+  $("#follow-up-list").innerHTML = cards.join("");
+  document.querySelectorAll("[data-follow-up]").forEach((button) => {
+    button.onclick = () => {
+      if (button.dataset.followUp === "duplicates") {
+        $("#toggle-duplicates").click();
+        return;
+      }
+      openFollowUpInExplorer(button.dataset.followUp);
+    };
+  });
+}
+
+function openFollowUpInExplorer(attention) {
+  const sourceSelect = $("#dashboard-source-filter");
+  const sheetSelect = $("#dashboard-sheet-filter");
+  const [, label] = FOLLOW_UP_ITEMS.find(([key]) => key === attention);
+  state.explorerSourceId = sourceSelect.value;
+  state.explorerAttention = attention;
+  state.explorerContextLabel = `ติดตามงาน: ${label}`;
+  if (sourceSelect.value) {
+    state.explorerContextLabel += ` · ${sourceSelect.selectedOptions[0].text}`;
+  }
+  if (sheetSelect.value) {
+    $("#sheet-filter").value = sheetSelect.value;
+    state.explorerContextLabel += ` / ${sheetSelect.value}`;
+  }
+  state.page = 1;
+  navigate("explorer");
+}
+
+function clearExplorerDashboardContext() {
+  state.explorerSourceId = "";
+  state.explorerAttention = "";
+  state.explorerContextLabel = "";
 }
 
 function renderDuplicateGroup(group) {
@@ -146,6 +276,8 @@ function filters() {
     if (value) params.set(name, value);
   });
   if ($("#description-filter").checked) params.set("has_description", "true");
+  if (state.explorerSourceId) params.set("source_id", state.explorerSourceId);
+  if (state.explorerAttention) params.set("attention", state.explorerAttention);
   return params;
 }
 async function loadRecords() {
@@ -154,7 +286,7 @@ async function loadRecords() {
   state.total = data.total;
   state.lastItems = data.items;
   $("#result-summary").textContent =
-    `พบ ${data.total.toLocaleString()} ระเบียน`;
+    `พบ ${data.total.toLocaleString()} ระเบียน${state.explorerContextLabel ? ` · ${state.explorerContextLabel}` : ""}`;
   $("#records-body").innerHTML =
     data.items.map(renderRecordRow).join("") ||
     `<tr><td colspan="6" class="muted">ไม่พบข้อมูลตามเงื่อนไข</td></tr>`;
@@ -170,30 +302,123 @@ function renderBars(target, items) {
     items.map((item) => renderBar(item, max)).join("") ||
     `<p class="muted">ยังไม่มีข้อมูล</p>`;
 }
+
+function dashboardFilterParams() {
+  const params = new URLSearchParams();
+  const sourceId = $("#dashboard-source-filter").value;
+  const sourceSheet = $("#dashboard-sheet-filter").value;
+  if (sourceId) params.set("source_id", sourceId);
+  if (sourceSheet) params.set("source_sheet", sourceSheet);
+  return params;
+}
+
+async function loadDashboardFilterSources() {
+  if (state.dashboardSources.length) return;
+  const catalog = await (await fetch("/api/catalog")).json();
+  state.dashboardSources = catalog.sources;
+  const sourceSelect = $("#dashboard-source-filter");
+  const selectedSource = sourceSelect.value;
+  sourceSelect.innerHTML = `<option value="">ทุกแหล่งข้อมูล</option>${catalog.sources
+    .map((source) => `<option value="${source.id}">${escapeHtml(source.name)} (${source.record_count.toLocaleString()})</option>`)
+    .join("")}`;
+  sourceSelect.value = [...sourceSelect.options].some(
+    (option) => option.value === selectedSource,
+  )
+    ? selectedSource
+    : "";
+}
+
+async function updateDashboardSheetOptions() {
+  const sourceId = $("#dashboard-source-filter").value;
+  const sheetSelect = $("#dashboard-sheet-filter");
+  const selectedSheet = sheetSelect.value;
+  if (!sourceId) {
+    sheetSelect.innerHTML = `<option value="">ทุกชีต</option>`;
+    sheetSelect.disabled = true;
+    return;
+  }
+
+  sheetSelect.innerHTML = `<option value="">กำลังโหลดชีต…</option>`;
+  sheetSelect.disabled = true;
+  let sheets = state.dashboardSheetsBySource.get(sourceId);
+  if (!sheets) {
+    const source = state.dashboardSources.find(
+      (item) => String(item.id) === sourceId,
+    );
+    const configuredSheets = (source?.configured_sheets || []).map(
+      (item) => item.name,
+    );
+    const sourceDashboard = await (
+      await fetch(`/api/dashboard?source_id=${encodeURIComponent(sourceId)}`)
+    ).json();
+    sheets = [...new Set([
+      ...configuredSheets,
+      ...sourceDashboard.by_source_sheet.map((item) => item.label),
+    ])].sort((left, right) => left.localeCompare(right, "th"));
+    state.dashboardSheetsBySource.set(sourceId, sheets);
+  }
+  sheetSelect.innerHTML = `<option value="">ทุกชีต</option>${sheets
+    .map((sheet) => `<option value="${escapeHtml(sheet)}">${escapeHtml(sheet)}</option>`)
+    .join("")}`;
+  sheetSelect.disabled = false;
+  sheetSelect.value = sheets.includes(selectedSheet) ? selectedSheet : "";
+}
+
+function dashboardScopeLabel() {
+  const sourceSelect = $("#dashboard-source-filter");
+  const sheetSelect = $("#dashboard-sheet-filter");
+  const scope = [];
+  if (sourceSelect.value) scope.push(sourceSelect.selectedOptions[0].text);
+  if (sheetSelect.value) scope.push(sheetSelect.value);
+  return scope.length ? ` · ${scope.join(" / ")}` : " · ทุกข้อมูล";
+}
+
 async function loadDashboard() {
-  const data = await (await fetch("/api/dashboard")).json();
+  await loadDashboardFilterSources();
+  const params = dashboardFilterParams();
+  const endpoint = params.size ? `/api/dashboard?${params}` : "/api/dashboard";
+  const data = await (await fetch(endpoint)).json();
   const metrics = [
-    ["ระเบียนทั้งหมด", data.total_records],
-    ["มีเลขทะเบียน", data.with_registration_no],
-    ["มีรายละเอียดรายการ", data.with_description],
-    ["มีลิงก์รูปภาพ", data.with_image_url],
+    ["ระเบียนทั้งหมด", data.total_records, "ข้อมูลที่นำเข้าในระบบกลาง"],
+    ["มีเลขทะเบียน", data.with_registration_no, `${percentOf(data.with_registration_no, data.total_records)} ของทั้งหมด`],
+    ["มีรายละเอียดรายการ", data.with_description, `${percentOf(data.with_description, data.total_records)} ของทั้งหมด`],
+    ["มีรูปภาพ", data.with_image_url, `${percentOf(data.with_image_url, data.total_records)} ของทั้งหมด`],
     ["ทะเบียนที่ซ้ำทั้งหมด", data.duplicate_registration_groups],
   ];
   $("#metrics").innerHTML = metrics
-    .map(([label, value]) => renderMetric(label, value))
+    .map(([label, value, note]) => renderDashboardMetric(label, value, note))
     .join("");
+  $("#dashboard-status").textContent =
+    `มีข้อมูล ${data.total_records.toLocaleString()} ระเบียน${dashboardScopeLabel()}`;
   renderBars("#chart-sheets", data.by_source_sheet);
   renderBars("#chart-check", data.by_data_check);
   renderBars("#chart-photo", data.by_photo);
   renderBars("#chart-antique", data.by_antique);
   renderBars("#chart-storage", data.by_storage);
+  renderDashboardSourceTable(data.by_source_sheet, data.total_records);
+  renderFollowUp(data);
   $("#duplicate-panel").hidden = true;
-  $("#toggle-duplicates").addEventListener("click", toggleDuplicateGroups);
+  $("#toggle-duplicates").onclick = toggleDuplicateGroups;
+  $("#open-explorer").onclick = () => {
+    const selectedSource = $("#dashboard-source-filter");
+    const selectedSheet = $("#dashboard-sheet-filter").value;
+    state.explorerSourceId = selectedSource.value;
+    state.explorerAttention = "";
+    state.explorerContextLabel = selectedSource.value
+      ? `ขอบเขตจาก Dashboard: ${selectedSource.selectedOptions[0].text}`
+      : "";
+    if (selectedSheet) $("#sheet-filter").value = selectedSheet;
+    if (selectedSheet) state.explorerContextLabel += ` / ${selectedSheet}`;
+    state.page = 1;
+    navigate("explorer");
+  };
 }
 async function loadDuplicateGroups() {
   $("#duplicate-groups").innerHTML =
     `<p class="muted">กำลังค้นหารายการที่ซ้ำ…</p>`;
-  const duplicates = await (await fetch("/api/duplicates?limit=50")).json();
+  const params = dashboardFilterParams();
+  params.set("limit", "50");
+  const duplicates = await (await fetch(`/api/duplicates?${params}`)).json();
   const duplicateCaption =
     duplicates.total_groups > duplicates.groups.length
       ? `<p class="muted">แสดง ${duplicates.groups.length.toLocaleString()} จาก ${duplicates.total_groups.toLocaleString()} กลุ่ม</p>`
@@ -274,6 +499,9 @@ function renderCatalogSource(source, canSyncFromWeb, isAdmin) {
   const syncMessage = sync?.message
     ? `<span title="${escapeHtml(sync.message)}">${escapeHtml(sync.message)}</span>`
     : "";
+  const schedule = source.sync_frequency_minutes
+    ? `<span>รอบอัตโนมัติ: ${escapeHtml(syncScheduleLabel(source.sync_frequency_minutes))}</span>`
+    : `<span>รอบ sync: ด้วยมือ</span>`;
 
   return `<article class="catalog-item">
     <h3>${escapeHtml(source.name)}</h3>
@@ -285,6 +513,7 @@ function renderCatalogSource(source, canSyncFromWeb, isAdmin) {
       <span>ระเบียน: ${source.record_count.toLocaleString()}</span>
       <span class="issue">ประเด็นที่ยังไม่ปิด: ${source.unresolved_issues.toLocaleString()}</span>
       <span>sync ล่าสุด: ${escapeHtml(syncTime)}</span>
+      ${schedule}
       ${bridgeStatus}${syncMessage}
     </div>
     ${renderCatalogActions(source, bridge, canSyncFromWeb, isAdmin)}
@@ -370,19 +599,20 @@ async function syncImageBridge(button) {
   button.disabled = true;
   const originalText = button.textContent;
   button.textContent = "กำลังดึงรูป…";
-  catalogMessage("กำลังอ่านรายการรูปจาก Google Drive…");
+  imageBridgeMessage(button, "กำลังอ่านรายการรูปจาก Google Drive…");
   try {
     const result = await adminFetch(
       `/api/admin/google-sheets/${button.dataset.imageBridgeSyncSource}/image-bridge/sync`,
       { method: "POST", body: "{}" },
     );
-    catalogMessage(
-      `Sync รูปสำเร็จ: จับคู่ ${result.matched_records.toLocaleString()} ระเบียน · รูปใหม่/เปลี่ยน ${result.changed_images.toLocaleString()} · เอารูปเก่าออก ${result.removed_images.toLocaleString()} · จับคู่ไม่พบ ${result.unmatched_count.toLocaleString()} · ต้องตรวจ ${result.invalid_count.toLocaleString()}`,
+    imageBridgeMessage(
+      button,
+      imageBridgeResultMessage("Sync รูปสำเร็จ", result),
       Boolean(result.unmatched_count || result.invalid_count),
     );
     await Promise.all([loadCatalog(), loadAudit()]);
   } catch (error) {
-    catalogMessage(error.message, true);
+    imageBridgeMessage(button, error.message, true);
     button.disabled = false;
     button.textContent = originalText;
   }
@@ -647,31 +877,66 @@ function renderGoogleSourceTabs(sheets) {
   );
 }
 
-function renderImageBridgeControls(source, bridge, canPreview) {
-  const bridgeSync =
-    bridge.configured && canPreview
-      ? `<button type="button" data-image-bridge-sync-source="${source.id}" data-source-name="${escapeHtml(source.name)}">ดึงรูปภาพตอนนี้</button>`
-      : "";
-  return `<div class="image-bridge-config">
-    <strong>Image Bridge สำหรับภาพในเซลล์</strong>
-    <p class="muted">วาง Folder ID ของโฟลเดอร์ที่ Apps Script สร้างรูปและ manifest แล้วบันทึกหนึ่งครั้ง</p>
-    <label>Google Drive Folder ID
-      <input
-        data-image-bridge-folder="${source.id}"
-        value="${escapeHtml(bridge.drive_folder_id || "")}"
-        placeholder="ข้อความหลัง folders/ ใน URL"
-      >
+function syncScheduleLabel(minutes) {
+  const known = SYNC_SCHEDULE_OPTIONS.find(([value]) => Number(value) === Number(minutes));
+  return known ? known[1] : `ทุก ${Number(minutes).toLocaleString()} นาที`;
+}
+
+function renderSyncScheduleControls(source, syncState) {
+  const currentValue = String(source.sync_frequency_minutes || "");
+  const options = [...SYNC_SCHEDULE_OPTIONS];
+  if (currentValue && !options.some(([value]) => value === currentValue)) {
+    options.push([currentValue, syncScheduleLabel(source.sync_frequency_minutes)]);
+  }
+  const serverStatus = syncState.automaticReady
+    ? "ระบบอัตโนมัติพร้อมทำงานบนเครื่องนี้"
+    : "บันทึกรอบได้ แต่ยังไม่เปิดระบบอัตโนมัติบนเครื่องนี้";
+  return `<div class="image-bridge-config sync-schedule-config">
+    <strong>ตั้งรอบ Sync ข้อมูล</strong>
+    <p class="muted">${serverStatus} · ระบบจะอ่านข้อมูล Google Sheets ก่อน แล้วค่อยดึงรูปจาก Image Bridge หากตั้งค่าไว้</p>
+    <label>รอบซิงก์
+      <select data-sync-schedule="${source.id}">
+        ${options.map(([value, label]) => `<option value="${value}"${value === currentValue ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+      </select>
     </label>
     <div class="catalog-actions">
-      <button type="button" class="secondary" data-image-bridge-save="${source.id}">บันทึก Image Bridge</button>
-      ${bridgeSync}
+      <button type="button" class="secondary" data-sync-schedule-save="${source.id}">บันทึกรอบ Sync</button>
     </div>
   </div>`;
 }
 
-function renderAdminGoogleSource(source, canPreview) {
+function renderImageBridgeControls(source, bridge, canPreview) {
+  const enabled = bridge.configured && canPreview;
+  const actions = enabled
+    ? `<button type="button" class="secondary" data-image-bridge-inspect-source="${source.id}">ตรวจสอบสิทธิ์</button>
+       <button type="button" class="secondary" data-image-bridge-preview-source="${source.id}">ทดลองดึงรูป</button>
+       <button type="button" data-image-bridge-sync-source="${source.id}" data-source-name="${escapeHtml(source.name)}">ดึงรูปภาพตอนนี้</button>
+       <button type="button" class="danger" data-image-bridge-disconnect-source="${source.id}" data-source-name="${escapeHtml(source.name)}">ยกเลิกการเชื่อมต่อ</button>`
+    : "";
+  const bridgeStatus = bridge.configured
+    ? `<p class="image-bridge-status">สถานะ: ตั้งค่าแล้ว${bridge.last_synced_at ? ` · ดึงรูปล่าสุด ${escapeHtml(bridge.last_synced_at)}` : ""}${bridge.last_message ? ` · ${escapeHtml(bridge.last_message)}` : ""}</p>`
+    : `<p class="image-bridge-status">สถานะ: ยังไม่ได้ตั้งค่า</p>`;
+  return `<div class="image-bridge-config">
+    <strong>Image Bridge สำหรับภาพในเซลล์</strong>
+    <p class="muted">วางลิงก์โฟลเดอร์ Google Drive ทั้งเส้น หรือ Folder ID ของโฟลเดอร์ที่ Apps Script สร้างไฟล์ Bridge และ manifest</p>
+    ${bridgeStatus}
+    <label>Google Drive folder URL หรือ Folder ID
+      <input
+        data-image-bridge-folder="${source.id}"
+        value="${escapeHtml(bridge.drive_folder_id || "")}"
+        placeholder="https://drive.google.com/drive/folders/..."
+      >
+    </label>
+    <div class="catalog-actions">
+      <button type="button" class="secondary" data-image-bridge-save="${source.id}">บันทึก Image Bridge</button>
+      ${actions}
+    </div>
+  </div>`;
+}
+
+function renderAdminGoogleSource(source, syncState) {
   const bridge = source.image_bridge || { configured: false };
-  const previewAction = canPreview
+  const previewAction = syncState.canManual
     ? `<button type="button" data-source-preview="${source.id}">ตรวจสอบก่อน Sync</button>`
     : `<span class="muted">ตั้งค่า key ใน container ก่อนจึงตรวจสอบได้</span>`;
   return `<article class="catalog-item">
@@ -685,7 +950,8 @@ function renderAdminGoogleSource(source, canPreview) {
       <button type="button" class="secondary" data-source-fill="${source.id}">เพิ่มแท็บในไฟล์นี้</button>
       ${previewAction}
     </div>
-    ${renderImageBridgeControls(source, bridge, canPreview)}
+    ${renderSyncScheduleControls(source, syncState)}
+    ${renderImageBridgeControls(source, bridge, syncState.canManual)}
   </article>`;
 }
 
@@ -701,11 +967,23 @@ function bindAdminGoogleSourceActions(sourcesById) {
   document.querySelectorAll("[data-image-bridge-save]").forEach((button) => {
     button.addEventListener("click", () => saveImageBridge(button));
   });
+  document.querySelectorAll("[data-image-bridge-inspect-source]").forEach((button) => {
+    button.addEventListener("click", () => inspectImageBridge(button));
+  });
+  document.querySelectorAll("[data-image-bridge-preview-source]").forEach((button) => {
+    button.addEventListener("click", () => previewImageBridge(button));
+  });
   document
     .querySelectorAll("[data-image-bridge-sync-source]")
     .forEach((button) => {
       button.addEventListener("click", () => syncImageBridge(button));
     });
+  document.querySelectorAll("[data-image-bridge-disconnect-source]").forEach((button) => {
+    button.addEventListener("click", () => disconnectImageBridge(button));
+  });
+  document.querySelectorAll("[data-sync-schedule-save]").forEach((button) => {
+    button.addEventListener("click", () => saveSyncSchedule(button));
+  });
 }
 
 async function loadAdminGoogleSources() {
@@ -713,13 +991,16 @@ async function loadAdminGoogleSources() {
     adminFetch("/api/admin/google-sheets"),
     fetch("/api/health").then((response) => response.json()),
   ]);
-  const canPreview = healthData.google_sheets_web_sync_available;
+  const syncState = {
+    canManual: healthData.google_sheets_web_sync_available,
+    automaticReady: healthData.google_sheets_auto_sync_available,
+  };
   const sourcesById = new Map(
     sourceData.sources.map((source) => [String(source.id), source]),
   );
   $("#admin-google-sources-list").innerHTML =
     sourceData.sources
-      .map((source) => renderAdminGoogleSource(source, canPreview))
+      .map((source) => renderAdminGoogleSource(source, syncState))
       .join("") || `<p class="muted">ยังไม่มี Google Sheets ที่ลงทะเบียน</p>`;
   bindAdminGoogleSourceActions(sourcesById);
 }
@@ -729,7 +1010,7 @@ async function saveImageBridge(button) {
     .querySelector(`[data-image-bridge-folder="${sourceId}"]`)
     .value.trim();
   if (!folderId) {
-    googleSourceMessage("กรุณาวาง Google Drive Folder ID ก่อน", true);
+    googleSourceMessage("กรุณาวางลิงก์โฟลเดอร์ Google Drive หรือ Folder ID ก่อน", true);
     return;
   }
   button.disabled = true;
@@ -739,7 +1020,7 @@ async function saveImageBridge(button) {
       body: JSON.stringify({ drive_folder_id: folderId }),
     });
     googleSourceMessage(
-      "บันทึก Image Bridge แล้ว — เมื่อ Apps Script สร้าง manifest แล้วจึงกดดึงรูปภาพได้",
+      "บันทึก Image Bridge แล้ว — กด “ตรวจสอบสิทธิ์” เพื่อดูว่า service account เห็น manifest หรือไม่",
     );
     await Promise.all([loadAdminGoogleSources(), loadCatalog(), loadAudit()]);
   } catch (error) {
@@ -747,6 +1028,111 @@ async function saveImageBridge(button) {
     button.disabled = false;
   }
 }
+async function saveSyncSchedule(button) {
+  const sourceId = button.dataset.syncScheduleSave;
+  const value = document.querySelector(`[data-sync-schedule="${sourceId}"]`).value;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "กำลังบันทึก…";
+  try {
+    const result = await adminFetch(`/api/admin/google-sheets/${sourceId}/sync-schedule`, {
+      method: "PUT",
+      body: JSON.stringify({ sync_frequency_minutes: value ? Number(value) : null }),
+    });
+    const detail = result.sync_frequency_minutes
+      ? `ตั้งรอบ ${syncScheduleLabel(result.sync_frequency_minutes)} แล้ว`
+      : "ตั้งให้ซิงก์ด้วยมือเท่านั้นแล้ว";
+    const server = result.automatic_sync_server_enabled
+      ? " ระบบอัตโนมัติพร้อมทำงาน"
+      : " ระบบอัตโนมัติยังปิดอยู่ใน .env";
+    googleSourceMessage(`${detail} · ${server}`);
+    await Promise.all([loadAdminGoogleSources(), loadCatalog(), loadAudit()]);
+  } catch (error) {
+    googleSourceMessage(error.message, true);
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+function imageBridgeMessage(button, message = "", isError = false) {
+  if (button.closest("#admin-google-sources-list")) {
+    googleSourceMessage(message, isError);
+    return;
+  }
+  catalogMessage(message, isError);
+}
+
+function imageBridgeResultMessage(prefix, result) {
+  return `${prefix}: จับคู่ ${result.matched_records.toLocaleString()} ระเบียน · รูปใหม่/เปลี่ยน ${result.changed_images.toLocaleString()} · เอารูปเก่าออก ${result.removed_images.toLocaleString()} · จับคู่ไม่พบ ${result.unmatched_count.toLocaleString()} · ต้องตรวจ ${result.invalid_count.toLocaleString()}`;
+}
+
+async function inspectImageBridge(button) {
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "กำลังตรวจ…";
+  imageBridgeMessage(button, "กำลังตรวจสอบสิทธิ์และไฟล์ใน Google Drive…");
+  try {
+    const result = await adminFetch(
+      `/api/admin/google-sheets/${button.dataset.imageBridgeInspectSource}/image-bridge/inspect`,
+      { method: "POST", body: "{}" },
+    );
+    const visibleCount = result.files_visible_to_service_account.length;
+    const manifestStatus = result.manifest_visible ? "พบ manifest แล้ว" : "ยังไม่พบ manifest";
+    imageBridgeMessage(
+      button,
+      `ตรวจสอบแล้ว: service account เห็นโฟลเดอร์ “${result.bridge_folder.name}” และเห็น ${visibleCount.toLocaleString()} ไฟล์ · ${manifestStatus}`,
+      !result.manifest_visible,
+    );
+  } catch (error) {
+    imageBridgeMessage(button, error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+async function previewImageBridge(button) {
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "กำลังทดลอง…";
+  imageBridgeMessage(button, "กำลังอ่าน Image Bridge โดยยังไม่บันทึกรูป…");
+  try {
+    const result = await adminFetch(
+      `/api/admin/google-sheets/${button.dataset.imageBridgePreviewSource}/image-bridge/preview`,
+      { method: "POST", body: "{}" },
+    );
+    imageBridgeMessage(
+      button,
+      imageBridgeResultMessage("ทดลองดึงรูปแล้ว", result),
+      Boolean(result.unmatched_count || result.invalid_count),
+    );
+  } catch (error) {
+    imageBridgeMessage(button, error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+async function disconnectImageBridge(button) {
+  const sourceName = button.dataset.sourceName || "แหล่งข้อมูลนี้";
+  if (!window.confirm(`ยืนยันว่าต้องการยกเลิก Image Bridge ของ “${sourceName}” ใช่หรือไม่? การทำรายการนี้ไม่ลบระเบียน รูปที่ดึงมาแล้ว หรือไฟล์ใน Google Drive`)) return;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "กำลังยกเลิก…";
+  try {
+    await adminFetch(
+      `/api/admin/google-sheets/${button.dataset.imageBridgeDisconnectSource}/image-bridge`,
+      { method: "DELETE" },
+    );
+    googleSourceMessage("ยกเลิกการเชื่อมต่อ Image Bridge แล้ว โดยเก็บข้อมูลและรูปเดิมไว้");
+    await Promise.all([loadAdminGoogleSources(), loadCatalog(), loadAudit()]);
+  } catch (error) {
+    googleSourceMessage(error.message, true);
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 function renderImageIntakeSheets() {
   const sourceSelect = $("#admin-image-intake-source");
   const sheetSelect = $("#admin-image-intake-sheet");
@@ -1267,8 +1653,25 @@ document
   .forEach((button) =>
     button.addEventListener("click", () => navigate(button.dataset.view)),
   );
+$("#dashboard-source-filter").addEventListener("change", () => {
+  updateDashboardSheetOptions().catch((error) => {
+    $("#dashboard-status").textContent = `เกิดข้อผิดพลาด: ${error.message}`;
+  });
+});
+$("#dashboard-filter-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  loadDashboard().catch((error) => {
+    $("#dashboard-status").textContent = `เกิดข้อผิดพลาด: ${error.message}`;
+  });
+});
+$("#dashboard-filter-reset").addEventListener("click", async () => {
+  $("#dashboard-source-filter").value = "";
+  await updateDashboardSheetOptions();
+  await loadDashboard();
+});
 $("#search-form").addEventListener("submit", (event) => {
   event.preventDefault();
+  clearExplorerDashboardContext();
   state.page = 1;
   loadRecords();
 });
@@ -1321,6 +1724,7 @@ $("#admin-logout").addEventListener("click", async () => {
   await loadAdmin();
 });
 window.addEventListener("popstate", () => renderRoute());
+initialiseTheme();
 initialise().catch((error) => {
   $("#freshness").textContent = `เกิดข้อผิดพลาด: ${error.message}`;
 });
