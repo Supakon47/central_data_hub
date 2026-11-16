@@ -1,0 +1,82 @@
+import { adminFetch } from "../api.js";
+import { $, escapeHtml } from "../core/dom.js";
+import { state } from "../core/state.js";
+
+export function createImageIntakeController({ loadAudit, loadDashboard, loadRecords }) {
+  function showMessage(message = "", isError = false) {
+    const target = $("#admin-image-intake-message");
+    target.textContent = message;
+    target.classList.toggle("error", isError);
+  }
+
+  function renderSheets() {
+    const sourceSelect = $("#admin-image-intake-source");
+    const sheetSelect = $("#admin-image-intake-sheet");
+    const source = state.imageIntakeSources.find(
+      (item) => String(item.id) === sourceSelect.value,
+    );
+    sheetSelect.innerHTML = `<option value="">เลือกชีต</option>${(source?.sheets || []).map((sheet) => `<option value="${escapeHtml(sheet.name)}">${escapeHtml(sheet.name)} (${sheet.record_count.toLocaleString()} ระเบียน)</option>`).join("")}`;
+    sheetSelect.disabled = !source;
+  }
+
+  async function loadSources() {
+    const sourceSelect = $("#admin-image-intake-source");
+    const selected = sourceSelect.value;
+    const data = await adminFetch("/api/admin/image-intake/sources");
+    state.imageIntakeSources = data.sources;
+    sourceSelect.innerHTML = `<option value="">เลือกแหล่งข้อมูล</option>${data.sources.map((source) => `<option value="${source.id}">${escapeHtml(source.name)}</option>`).join("")}`;
+    sourceSelect.value = data.sources.some(
+      (source) => String(source.id) === selected,
+    ) ? selected : "";
+    renderSheets();
+    showMessage(data.sources.length ? "" : "ยังไม่พบชีตที่มี record_id สำหรับจับคู่ภาพ");
+  }
+
+  async function upload(event) {
+    event.preventDefault();
+    const sourceId = $("#admin-image-intake-source").value;
+    const sheetName = $("#admin-image-intake-sheet").value;
+    const files = $("#admin-image-intake-files").files;
+    if (!sourceId || !sheetName || !files?.length) {
+      showMessage("เลือกแหล่งข้อมูล ชีต และไฟล์รูปภาพก่อน", true);
+      return;
+    }
+    const button = event.currentTarget.querySelector("button[type='submit']");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "กำลังนำภาพเข้า…";
+    showMessage("กำลังจับคู่ชื่อไฟล์กับ record_id โดยไม่แก้ Google Sheets…");
+    try {
+      const form = new FormData();
+      form.append("sheet_name", sheetName);
+      [...files].forEach((file) => form.append("images", file));
+      const response = await fetch(`/api/admin/image-intake/${sourceId}`, {
+        method: "POST",
+        body: form,
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || "นำภาพเข้าไม่สำเร็จ");
+      }
+      const result = await response.json();
+      const notes = [`นำเข้าแล้ว ${result.uploaded.toLocaleString()} ภาพ`];
+      if (result.unmatched_count) {
+        notes.push(`ไม่พบ record_id ${result.unmatched_count.toLocaleString()} รายการ: ${result.unmatched.join(", ")}${result.unmatched_count > result.unmatched.length ? "…" : ""}`);
+      }
+      if (result.invalid_count) {
+        notes.push(`ข้ามไฟล์ ${result.invalid_count.toLocaleString()} ไฟล์: ${result.invalid_files.join(", ")}${result.invalid_count > result.invalid_files.length ? "…" : ""}`);
+      }
+      showMessage(notes.join(" · "), Boolean(result.unmatched_count || result.invalid_count));
+      event.currentTarget.reset();
+      renderSheets();
+      await Promise.all([loadRecords(), loadDashboard(), loadAudit()]);
+    } catch (error) {
+      showMessage(error.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+
+  return { loadSources, renderSheets, upload };
+}

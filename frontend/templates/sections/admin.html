@@ -1,0 +1,73 @@
+<section id="admin" class="view">
+  <div class="section-heading">
+    <div><h2>จัดการข้อมูล</h2><p>เพิ่ม แก้ไข หรือลบข้อมูลในสำเนากลาง โดยต้องปลดล็อกด้วยรหัสผ่านผู้ดูแล</p></div>
+  </div>
+  <p id="admin-message" class="admin-message" role="status"></p>
+  <article id="admin-login" class="panel admin-login">
+    <h3>เข้าสู่หน้าจัดการ</h3>
+    <p class="muted">หน้าดูข้อมูลทั่วไปยังคงใช้ได้โดยไม่ต้องเข้าสู่ระบบ</p>
+    <form id="admin-login-form" class="inline-form">
+      <label>รหัสผ่านผู้ดูแล<input id="admin-password" type="password" required autocomplete="current-password" /></label>
+      <button type="submit">ปลดล็อก</button>
+    </form>
+  </article>
+  <div id="admin-content" hidden>
+    <div class="admin-notice"><strong>ขอบเขตการแก้ไข:</strong> หน้านี้แก้เฉพาะสำเนาข้อมูลกลาง ไม่แก้ Excel หรือ Google Sheet ต้นทาง การ sync ในอนาคตอาจนำค่าที่ต้นทางเปลี่ยนแล้วกลับมาแทนที่ และการลบระเบียนจากแหล่งที่ sync อาจถูกนำเข้าใหม่ได้</div>
+    <div class="admin-toolbar">
+      <button id="admin-new-record" type="button">+ เพิ่มระเบียนใหม่</button>
+      <button id="admin-logout" class="secondary" type="button">ออกจากหน้าจัดการ</button>
+    </div>
+    <div class="admin-grid">
+      <article class="panel admin-editor"><div id="admin-editor"></div></article>
+      <article class="panel"><h3>ประวัติการแก้ไขล่าสุด</h3><div id="audit-list" class="audit-list"></div></article>
+    </div>
+    <details id="admin-google-sources-panel" class="panel admin-records">
+      <summary><span><strong>จัดการแหล่งข้อมูล Google Sheets</strong><span class="muted">เพิ่มไฟล์ เพิ่มแท็บ และตรวจสอบก่อน sync</span></span></summary>
+      <div class="admin-records-content">
+        <p class="muted">วาง URL ของ Google Sheets ได้ทั้งเส้น หรือกรอก Spreadsheet ID และชื่อแท็บที่เจ้าของข้อมูลอนุมัติแล้ว ระบบไม่รับหรือแสดง private key</p>
+        <p id="admin-google-source-message" class="admin-message" role="status"></p>
+        <form id="admin-google-source-form" class="form-grid admin-form">
+          <label>ชื่อแหล่งข้อมูล<input name="source_name" required placeholder="เช่น ทะเบียนโบราณวัตถุ ฝ่ายตัวอย่าง" /></label>
+          <label>Google Sheets URL หรือ Spreadsheet ID<input name="spreadsheet_id" required placeholder="วาง URL ของ Google Sheets ได้เลย" /></label>
+          <label>ชื่อแท็บ<input name="sheet_name" required placeholder="เช่น Sheet1" /></label>
+          <label>ช่วงข้อมูล<input name="read_range" value="A:ZZ" required placeholder="เช่น A:ZZ" /></label>
+          <label>ผู้รับผิดชอบ<input name="owner_name" placeholder="เช่น ฝ่ายทะเบียน" /></label>
+          <label>คำอธิบาย<textarea name="description" rows="3" placeholder="คำอธิบายแหล่งข้อมูล (ถ้ามี)"></textarea></label>
+          <div class="form-actions"><button type="submit">บันทึกแหล่งข้อมูล / เพิ่มแท็บ</button><button id="admin-google-source-reset" class="secondary" type="button">ล้างฟอร์ม</button></div>
+        </form>
+        <h3 class="detail-section">แหล่งข้อมูลที่ลงทะเบียนแล้ว</h3>
+        <div id="admin-google-sources-list" class="catalog-list"></div>
+      </div>
+    </details>
+    <details id="admin-image-intake-panel" class="panel admin-records">
+      <summary><span><strong>นำภาพเข้าจำนวนมากสำหรับ AI</strong><span class="muted">จับคู่ชื่อไฟล์กับ record_id โดยไม่แก้ Google Sheets</span></span></summary>
+      <div class="admin-records-content">
+        <p class="muted">ตั้งชื่อไฟล์ให้ตรงกับ <code>record_id</code> ในชีต เช่น <code>ARC-69-0001.jpg</code> แล้วเลือกรูปหลายไฟล์ได้พร้อมกัน ระบบรับ JPEG, PNG, GIF หรือ WebP สูงสุด 100 ไฟล์/100 MB ต่อครั้ง</p>
+        <p id="admin-image-intake-message" class="admin-message" role="status"></p>
+        <form id="admin-image-intake-form" class="admin-record-search image-intake-form">
+          <label>แหล่งข้อมูล<select id="admin-image-intake-source" required><option value="">เลือกแหล่งข้อมูล</option></select></label>
+          <label>ชีตต้นทาง<select id="admin-image-intake-sheet" required><option value="">เลือกชีต</option></select></label>
+          <label>ไฟล์รูปภาพ<input id="admin-image-intake-files" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple required /></label>
+          <button type="submit">นำภาพเข้า</button>
+        </form>
+      </div>
+    </details>
+    <details id="admin-records-panel" class="panel admin-records">
+      <summary><span><strong>ระเบียนสำหรับจัดการ</strong><span class="muted">ค้นหา กรอง และกดเพื่อเปิดรายการ</span></span></summary>
+      <div class="admin-records-content">
+        <form id="admin-search-form" class="admin-record-search">
+          <label>คำค้นสำหรับแก้ไข<input id="admin-query" placeholder="เลขทะเบียน, รายการ, ชนิด…" /></label>
+          <label>ชีตต้นทาง<select id="admin-sheet-filter"><option value="">ทุกชีต</option></select></label>
+          <button type="submit">ค้นหาระเบียน</button>
+        </form>
+        <p id="admin-record-summary" class="muted"></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>เลขทะเบียน</th><th>รายการ</th><th>แหล่งข้อมูล</th><th>การทำงาน</th></tr></thead>
+            <tbody id="admin-records-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+  </div>
+</section>

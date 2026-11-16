@@ -1,0 +1,25 @@
+<section id="explorer" class="view active">
+  <div class="section-heading">
+    <div>
+      <h2>Data Explorer</h2>
+      <p>ค้นหาและกรองข้อมูลจากสำเนากลาง โดยทุกแถวย้อนกลับไปยังแหล่งข้อมูลได้</p>
+    </div>
+  </div>
+  <form id="search-form" class="filters">
+    <label>คำค้น<input id="query" name="q" placeholder="เลขทะเบียน, รายการ, ชนิด, อายุสมัย…" /></label>
+    <label>ชีตต้นทาง<select id="sheet-filter" name="source_sheet"><option value="">ทุกชีต</option></select></label>
+    <label>การตรวจสอบ<select id="check-filter" name="status_data_check"><option value="">ทุกสถานะ</option></select></label>
+    <label class="checkbox"><input id="description-filter" type="checkbox" />มีรายละเอียดรายการ</label>
+    <button type="submit">ค้นหา</button>
+  </form>
+  <p id="result-summary" class="muted"></p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>เลขทะเบียน</th><th>รายการ</th><th>ชนิด</th><th>อายุสมัย</th><th>ตรวจสอบ</th><th>แหล่งข้อมูล</th></tr></thead>
+      <tbody id="records-body"></tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    <button id="previous-page">ก่อนหน้า</button><span id="page-label"></span><button id="next-page">ถัดไป</button>
+  </div>
+</section>

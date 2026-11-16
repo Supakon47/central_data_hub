@@ -221,8 +221,8 @@ central-data-hub/
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/
-│   ├── index.html
-│   ├── app.js
+│   ├── templates/             # Jinja page shell, partials, and sections
+│   ├── js/                    # Browser modules: core, views, and main entry
 │   └── styles.css
 ├── docker-compose.yml
 └── .env.example

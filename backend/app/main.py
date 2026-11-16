@@ -9,8 +9,9 @@ import uuid
 from typing import Annotated
 
 from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -50,6 +51,7 @@ from .sync_google_image_bridge import sync_google_image_bridge
 app = FastAPI(title=APP_NAME, version="0.1.0")
 app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
 app.mount("/media", StaticFiles(directory=IMAGE_STORAGE_DIR), name="media")
+templates = Jinja2Templates(directory=str(FRONTEND_DIR / "templates"))
 
 
 EDITABLE_RECORD_FIELDS = (
@@ -1330,5 +1332,5 @@ def admin_audit(
 
 
 @app.get("/")
-def home() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "index.html")
+def home(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request=request, name="index.html")

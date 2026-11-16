@@ -1,0 +1,22 @@
+<section id="quality" class="view">
+  <div class="section-heading">
+    <div>
+      <h2>คุณภาพข้อมูล</h2>
+      <p>ตรวจสอบประเด็นที่ระบบพบระหว่าง import หรือ sync โดยไม่แก้ไขข้อมูลต้นทาง</p>
+    </div>
+  </div>
+  <div id="quality-metrics" class="metrics"></div>
+  <form id="quality-filter-form" class="filters quality-filters">
+    <label>แหล่งข้อมูล<select id="quality-source-filter"><option value="">ทุกแหล่งข้อมูล</option></select></label>
+    <label>ความสำคัญ<select id="quality-severity-filter"><option value="">ทุกระดับ</option><option value="error">ต้องแก้ไข</option><option value="warning">ควรตรวจสอบ</option></select></label>
+    <label class="checkbox"><input id="quality-include-resolved" type="checkbox" />แสดงรายการที่ปิดแล้ว</label>
+    <button type="submit">แสดงประเด็น</button>
+  </form>
+  <p id="quality-summary" class="muted"></p>
+  <div class="table-wrap">
+    <table class="quality-table">
+      <thead><tr><th>ระดับ</th><th>ประเด็น</th><th>ตำแหน่งต้นทาง</th><th>ระเบียน</th><th>สถานะ</th></tr></thead>
+      <tbody id="quality-body"></tbody>
+    </table>
+  </div>
+</section>

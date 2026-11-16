@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Central Data Hub</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20261113-1" />
+  </head>
+  <body>
+    {% include "partials/header.html" %}
+    {% include "partials/navigation.html" %}
+    <main>
+      {% include "sections/explorer.html" %}
+      {% include "sections/dashboard.html" %}
+      {% include "sections/catalog.html" %}
+      {% include "sections/quality.html" %}
+      {% include "sections/admin.html" %}
+      {% include "sections/detail.html" %}
+    </main>
+    <script type="module" src="/assets/js/main.js?v=20261116-7"></script>
+  </body>
+</html>
