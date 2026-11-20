@@ -10,11 +10,11 @@ import { createImageIntakeController } from "./views/admin-intake.js";
 import { loadAuditLog } from "./views/admin-audit.js";
 import { createImageBridgeController } from "./views/admin-image-bridge.js";
 import { renderSyncScheduleControls, syncScheduleLabel } from "./views/admin-sync-schedule.js";
-import { fetchGoogleSourceState, renderGoogleSourceList } from "./views/admin-sources.js";
+import { fetchGoogleSourceState, fillGoogleSourceForm, renderGoogleSourceCard, renderGoogleSourceList } from "./views/admin-sources.js";
 import { adminFetch } from "./api.js";
 import { pushRoute, routeFromLocation } from "./router.js";
 
-const BUILD_VERSION = "2026.11.16.7";
+const BUILD_VERSION = "2026.11.20.2";
 
 let explorer;
 let dashboard;
@@ -129,29 +129,6 @@ function googleSourceMessage(message = "", isError = false) {
   target.textContent = message;
   target.classList.toggle("error", isError);
 }
-function fillGoogleSourceForm(source) {
-  const form = $("#admin-google-source-form");
-  form.elements.source_name.value = source.name || "";
-  form.elements.spreadsheet_id.value = source.spreadsheet_id || "";
-  form.elements.owner_name.value = source.owner_name || "";
-  form.elements.description.value = source.description || "";
-  form.elements.sheet_name.value = "";
-  form.elements.read_range.value = "A:ZZ";
-  $("#admin-google-sources-panel").open = true;
-  form.elements.sheet_name.focus();
-}
-
-function renderGoogleSourceTabs(sheets) {
-  return (
-    sheets
-      .map(
-        (sheet) =>
-          `${escapeHtml(sheet.name)} <span class="muted">(${escapeHtml(sheet.read_range)})</span>`,
-      )
-      .join(" · ") || "ยังไม่มีแท็บ"
-  );
-}
-
 function renderImageBridgeControls(source, bridge, canPreview) {
   const enabled = bridge.configured && canPreview;
   const actions = enabled
@@ -179,27 +156,6 @@ function renderImageBridgeControls(source, bridge, canPreview) {
       ${actions}
     </div>
   </div>`;
-}
-
-function renderAdminGoogleSource(source, syncState) {
-  const bridge = source.image_bridge || { configured: false };
-  const previewAction = syncState.canManual
-    ? `<button type="button" data-source-preview="${source.id}">ตรวจสอบก่อน Sync</button>`
-    : `<span class="muted">ตั้งค่า key ใน container ก่อนจึงตรวจสอบได้</span>`;
-  return `<article class="catalog-item">
-    <h3>${escapeHtml(source.name)}</h3>
-    <p class="muted">${compact(source.description, "ไม่มีคำอธิบาย")}</p>
-    <div class="catalog-meta">
-      <span>ผู้รับผิดชอบ: ${compact(source.owner_name)}</span>
-      <span>แท็บ: ${renderGoogleSourceTabs(source.sheets)}</span>
-    </div>
-    <div class="catalog-actions">
-      <button type="button" class="secondary" data-source-fill="${source.id}">เพิ่มแท็บในไฟล์นี้</button>
-      ${previewAction}
-    </div>
-    ${renderSyncScheduleControls(source, syncState)}
-    ${renderImageBridgeControls(source, bridge, syncState.canManual)}
-  </article>`;
 }
 
 function bindAdminGoogleSourceActions(sourcesById) {
@@ -240,7 +196,10 @@ async function loadAdminGoogleSources() {
   );
   $("#admin-google-sources-list").innerHTML = renderGoogleSourceList(
     sources,
-    (source) => renderAdminGoogleSource(source, syncState),
+    (source) => renderGoogleSourceCard(source, syncState, {
+      renderBridge: renderImageBridgeControls,
+      renderSchedule: renderSyncScheduleControls,
+    }),
   );
   bindAdminGoogleSourceActions(sourcesById);
 }
@@ -463,23 +422,34 @@ async function loadAdmin() {
   ]);
 }
 async function loadFilterOptions() {
-  const data = await (await fetch("/api/dashboard")).json();
+  const [data, filterData] = await Promise.all([
+    fetch("/api/dashboard").then((response) => response.json()),
+    fetch("/api/filter-options").then((response) => response.json()),
+  ]);
   const setOptions = (target, items) => {
-    $(target).insertAdjacentHTML(
-      "beforeend",
-      items
-        .map(
-          (item) =>
-            `<option value="${escapeHtml(item.label)}">${escapeHtml(item.label)} (${item.count.toLocaleString()})</option>`,
-        )
-        .join(""),
-    );
+    const select = $(target);
+    const placeholder = select.options[0].outerHTML;
+    select.innerHTML = `${placeholder}${items
+      .map(
+        (item) =>
+          `<option value="${escapeHtml(item.label)}">${escapeHtml(item.label)} (${item.count.toLocaleString()})</option>`,
+      )
+      .join("")}`;
   };
   setOptions("#sheet-filter", data.by_source_sheet);
   setOptions(
     "#check-filter",
     data.by_data_check.filter((item) => item.label !== "ไม่ระบุ"),
   );
+  const setTextOptions = (target, items) => {
+    const select = $(target);
+    const placeholder = select.options[0].outerHTML;
+    select.innerHTML = `${placeholder}${items
+      .map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`)
+      .join("")}`;
+  };
+  setTextOptions("#material-filter", filterData.materials);
+  setTextOptions("#period-filter", filterData.periods);
 }
 async function initialise() {
   const health = await (await fetch("/api/health")).json();

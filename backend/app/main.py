@@ -4,9 +4,11 @@ from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import uuid
 from typing import Annotated
+import unicodedata
 
 from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse
@@ -72,6 +74,40 @@ ATTENTION_STATUS_FIELDS = {
     "photographed": (Record.status_photographed, "ถ่ายภาพแล้ว"),
     "antique": (Record.status_antique, "ลงระบบแล้ว"),
     "storage": (Record.status_storage, "ส่งขึ้นห้องคลังแล้ว"),
+}
+
+MATERIAL_DISPLAY_ALIASES = {
+    "หิo": "หิน",
+    "หิิน": "หิน",
+    "เหล็็ก": "เหล็ก",
+    "สำริิด": "สำริด",
+    "สําริด": "สำริด",
+    "ดิินเผา": "ดินเผา",
+    "ดิีบุก โลหะ": "ดีบุก โลหะ",
+    "โลหะ ไม้้": "โลหะไม้",
+    "ดินเผา เคลือบ": "ดินเผาเคลือบ",
+    "โลหะ ไม้": "โลหะไม้",
+    "เหล็ก ไม้": "เหล็กไม้",
+    "ปูน ปลาสเตอร์": "ปูนปลาสเตอร์",
+    "หิน ทรายแดง": "หินทรายแดง",
+    "หินทราย แดง": "หินทรายแดง",
+    "ทอง เหลือง": "ทองเหลือง",
+    "โลหะ งา": "โลหะงา",
+}
+
+PERIOD_DISPLAY_ALIASES = {
+    "ก่อน ประวัติ ศาสตร์": "ก่อนประวัติศาสตร์",
+    "ก่อน ประวัติศาสตร์": "ก่อนประวัติศาสตร์",
+    "ก่อนประวัติ ศาสตร์": "ก่อนประวัติศาสตร์",
+    "รัตน โกสินทร์": "รัตนโกสินทร์",
+    "พุทธศตวรรษ ที่": "พุทธศตวรรษที่",
+    "เขมร ในประเทศไทย": "เขมรในประเทศไทย",
+    "เลียนแบบ ศิลปะเขมรในประเทศไทย": "เลียนแบบศิลปะเขมรในประเทศไทย",
+    "พุทธศตรรษที่": "พุทธศตวรรษที่",
+    "พุทธศตวรษที่": "พุทธศตวรรษที่",
+    "พุทธศตววรษที่": "พุทธศตวรรษที่",
+    "พุทธสตวรรษที่": "พุทธศตวรรษที่",
+    "ล้านา": "ล้านนา",
 }
 
 
@@ -321,6 +357,8 @@ def list_records(
     q: str | None = None,
     source_id: int | None = None,
     source_sheet: str | None = None,
+    material: str | None = None,
+    period: str | None = None,
     status_data_check: str | None = None,
     status_photographed: str | None = None,
     status_antique: str | None = None,
@@ -351,6 +389,53 @@ def list_records(
     ]:
         if value is not None:
             statement = statement.where(column == value)
+    for column, value in [(Record.material, material), (Record.period, period)]:
+        if value is not None:
+            compact_column = func.replace(
+                func.replace(
+                    func.replace(
+                        func.replace(
+                            func.replace(
+                                func.replace(func.replace(column, " ", ""), "\n", ""),
+                                "\r",
+                                "",
+                            ),
+                            "\t",
+                            "",
+                        ),
+                        "\u200b",
+                        "",
+                    ),
+                    "\ufeff",
+                    "",
+                ),
+                "\u00a0",
+                "",
+            )
+            if column.key == "material":
+                compact_column = func.replace(
+                    func.replace(
+                        func.replace(compact_column, "หิo", "หิน"),
+                        "เหล็็ก",
+                        "เหล็ก",
+                    ),
+                    "หิิน",
+                    "หิน",
+                )
+            compact_column = func.regexp_replace(
+                compact_column,
+                r"([ิีึืุู็่้๊๋ั])\1+",
+                r"\1",
+                "g",
+            )
+            statement = statement.where(
+                compact_column
+                == re.sub(
+                    r"([ิีึืุู็่้๊๋ั])\1+",
+                    r"\1",
+                    re.sub(r"\s+", "", unicodedata.normalize("NFKC", value)),
+                )
+            )
     if attention:
         status_field, completed_status = ATTENTION_STATUS_FIELDS[attention]
         statement = statement.where(or_(status_field.is_(None), status_field != completed_status))
@@ -368,6 +453,47 @@ def list_records(
         "total": total,
         "page": page,
         "page_size": page_size,
+    }
+
+
+@app.get("/api/filter-options")
+def filter_options(session: Annotated[Session, Depends(get_session)]) -> dict:
+    repeated_thai_mark_pattern = r"([ิีึืุู็่้๊๋ั])\1+"
+
+    def collapse_duplicate_thai_marks(value: str) -> str:
+        return re.sub(repeated_thai_mark_pattern, r"\1", value)
+
+    def normalise_display_value(value: str, aliases: dict[str, str]) -> str:
+        value = unicodedata.normalize("NFKC", value)
+        value = value.replace("\u200b", "").replace("\ufeff", "").replace("\u00a0", " ")
+        value = collapse_duplicate_thai_marks(value)
+        value = re.sub(r"\s+", " ", value).strip()
+        value = re.sub(r"\s*-\s*", " - ", value)
+        for variant, replacement in aliases.items():
+            value = value.replace(variant, replacement)
+        return value
+
+    def comparison_key(value: str) -> str:
+        return re.sub(r"\s+", "", value).casefold()
+
+    def distinct_values(column, aliases: dict[str, str]) -> list[str]:
+        rows = session.scalars(
+            select(column)
+            .where(column.is_not(None), column != "")
+            .distinct()
+            .order_by(column)
+        ).all()
+        unique: dict[str, str] = {}
+        for value in rows:
+            if not value or not value.strip():
+                continue
+            display = normalise_display_value(value, aliases)
+            unique.setdefault(comparison_key(display), display)
+        return sorted(unique.values(), key=str.casefold)
+
+    return {
+        "materials": distinct_values(Record.material, MATERIAL_DISPLAY_ALIASES),
+        "periods": distinct_values(Record.period, PERIOD_DISPLAY_ALIASES),
     }
 
 
@@ -1333,4 +1459,6 @@ def admin_audit(
 
 @app.get("/")
 def home(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request=request, name="index.html")
+    response = templates.TemplateResponse(request=request, name="index.html")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response

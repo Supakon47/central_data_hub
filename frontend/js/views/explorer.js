@@ -35,7 +35,7 @@ export function createExplorerController({ navigate }) {
 
   function filters() {
     const params = new URLSearchParams({ page: state.page, page_size: state.pageSize });
-    ["q", "source_sheet", "status_data_check"].forEach((name) => {
+    ["q", "source_sheet", "material", "period", "status_data_check"].forEach((name) => {
       const value = document.querySelector(`[name="${name}"]`).value.trim();
       if (value) params.set(name, value);
     });
