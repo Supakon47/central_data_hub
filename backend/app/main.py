@@ -323,6 +323,7 @@ def record_summary(record: Record) -> dict:
         "title_description": record.title_description,
         "material": record.material,
         "period": record.period,
+        "image_url": record.image_url,
         "status_data_check": record.status_data_check,
         "status_photographed": record.status_photographed,
         "status_antique": record.status_antique,

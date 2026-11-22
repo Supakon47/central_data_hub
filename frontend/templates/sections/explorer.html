@@ -14,10 +14,17 @@
     <label class="checkbox"><input id="description-filter" type="checkbox" />มีรายละเอียดรายการ</label>
     <button type="submit">ค้นหา</button>
   </form>
-  <p id="result-summary" class="muted"></p>
-  <div class="table-wrap">
+  <div class="explorer-toolbar">
+    <p id="result-summary" class="muted"></p>
+    <div class="view-switch" aria-label="รูปแบบการแสดงผล">
+      <button type="button" class="secondary active" data-explorer-view="cards">การ์ดพร้อมภาพ</button>
+      <button type="button" class="secondary" data-explorer-view="table">ตาราง</button>
+    </div>
+  </div>
+  <div id="records-cards" class="records-cards"></div>
+  <div id="records-table-wrap" class="table-wrap" hidden>
     <table>
-      <thead><tr><th>เลขทะเบียน</th><th>รายการ</th><th>ชนิด</th><th>อายุสมัย</th><th>ตรวจสอบ</th><th>แหล่งข้อมูล</th></tr></thead>
+      <thead><tr><th>ภาพ</th><th>เลขทะเบียน</th><th>รายการ</th><th>ชนิด</th><th>อายุสมัย</th><th>ตรวจสอบ</th><th>แหล่งข้อมูล</th></tr></thead>
       <tbody id="records-body"></tbody>
     </table>
   </div>

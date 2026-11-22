@@ -10,4 +10,5 @@ export const state = {
   explorerSourceId: "",
   explorerAttention: "",
   explorerContextLabel: "",
+  explorerView: "cards",
 };
