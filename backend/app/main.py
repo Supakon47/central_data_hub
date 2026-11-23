@@ -364,8 +364,11 @@ def list_records(
     status_photographed: str | None = None,
     status_antique: str | None = None,
     status_storage: str | None = None,
+    registration_year: str | None = Query(default=None, pattern=r"^\d{4}$"),
     attention: str | None = Query(default=None, pattern="^(data_check|photographed|antique|storage)$"),
     has_description: bool | None = None,
+    has_image: bool | None = None,
+    sort_by: str = Query(default="registration", pattern="^(registration|source)$"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=PAGE_SIZE_DEFAULT, ge=1, le=PAGE_SIZE_MAX),
 ) -> dict:
@@ -388,7 +391,9 @@ def list_records(
         (Record.status_antique, status_antique),
         (Record.status_storage, status_storage),
     ]:
-        if value is not None:
+        if value == "ไม่ระบุ":
+            statement = statement.where(or_(column.is_(None), column == ""))
+        elif value is not None:
             statement = statement.where(column == value)
     for column, value in [(Record.material, material), (Record.period, period)]:
         if value is not None:
@@ -441,13 +446,24 @@ def list_records(
         status_field, completed_status = ATTENTION_STATUS_FIELDS[attention]
         statement = statement.where(or_(status_field.is_(None), status_field != completed_status))
     if has_description is True:
-        statement = statement.where(Record.title_description.is_not(None))
+        statement = statement.where(Record.title_description.is_not(None), Record.title_description != "")
     if has_description is False:
-        statement = statement.where(Record.title_description.is_(None))
+        statement = statement.where(or_(Record.title_description.is_(None), Record.title_description == ""))
+    if has_image is True:
+        statement = statement.where(Record.image_url.is_not(None), Record.image_url != "")
+    if has_image is False:
+        statement = statement.where(or_(Record.image_url.is_(None), Record.image_url == ""))
+    if registration_year:
+        statement = statement.where(Record.registration_no.ilike(f"%/{registration_year}%"))
 
     total = session.scalar(select(func.count()).select_from(statement.subquery())) or 0
+    order_by = (
+        (Record.source_sheet, Record.source_row_number, Record.id)
+        if sort_by == "source"
+        else (Record.registration_no, Record.id)
+    )
     records = session.scalars(
-        statement.order_by(Record.registration_no, Record.id).offset((page - 1) * page_size).limit(page_size)
+        statement.order_by(*order_by).offset((page - 1) * page_size).limit(page_size)
     ).all()
     return {
         "items": [record_summary(record) for record in records],
@@ -492,9 +508,23 @@ def filter_options(session: Annotated[Session, Depends(get_session)]) -> dict:
             unique.setdefault(comparison_key(display), display)
         return sorted(unique.values(), key=str.casefold)
 
+    registration_year_counts = Counter()
+    current_buddhist_year = datetime.now().year + 543
+    registration_numbers = session.scalars(
+        select(Record.registration_no).where(Record.registration_no.is_not(None), Record.registration_no != "")
+    ).all()
+    for registration_no in registration_numbers:
+        match = re.search(r"/(\d{4})(?:\D|$)", registration_no or "")
+        if match and 2400 <= int(match.group(1)) <= current_buddhist_year:
+            registration_year_counts[match.group(1)] += 1
+
     return {
         "materials": distinct_values(Record.material, MATERIAL_DISPLAY_ALIASES),
         "periods": distinct_values(Record.period, PERIOD_DISPLAY_ALIASES),
+        "registration_years": [
+            {"label": year, "count": count}
+            for year, count in sorted(registration_year_counts.items(), reverse=True)
+        ],
     }
 
 

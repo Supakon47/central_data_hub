@@ -1,4 +1,5 @@
 import { $, compact, escapeHtml } from "./core/dom.js";
+import { state } from "./core/state.js";
 import { initialiseTheme } from "./core/theme.js";
 import { createDashboardController } from "./views/dashboard.js";
 import { createDetailController } from "./views/detail.js";
@@ -14,7 +15,10 @@ import { fetchGoogleSourceState, fillGoogleSourceForm, renderGoogleSourceCard, r
 import { adminFetch } from "./api.js";
 import { pushRoute, routeFromLocation } from "./router.js";
 
-const BUILD_VERSION = "2026.11.20.2";
+const BUILD_VERSION = "2026.11.23.1";
+
+// Keep card pages even at the common six-card desktop layout.
+state.pageSize = 24;
 
 let explorer;
 let dashboard;
@@ -437,10 +441,11 @@ async function loadFilterOptions() {
       .join("")}`;
   };
   setOptions("#sheet-filter", data.by_source_sheet);
-  setOptions(
-    "#check-filter",
-    data.by_data_check.filter((item) => item.label !== "ไม่ระบุ"),
-  );
+  setOptions("#year-filter", filterData.registration_years);
+  setOptions("#check-filter", data.by_data_check);
+  setOptions("#photo-filter", data.by_photo);
+  setOptions("#antique-filter", data.by_antique);
+  setOptions("#storage-filter", data.by_storage);
   const setTextOptions = (target, items) => {
     const select = $(target);
     const placeholder = select.options[0].outerHTML;

@@ -54,11 +54,23 @@ export function createExplorerController({ navigate }) {
 
   function filters() {
     const params = new URLSearchParams({ page: state.page, page_size: state.pageSize });
-    ["q", "source_sheet", "material", "period", "status_data_check"].forEach((name) => {
+    [
+      "q",
+      "source_sheet",
+      "registration_year",
+      "material",
+      "period",
+      "status_data_check",
+      "status_photographed",
+      "status_antique",
+      "status_storage",
+      "has_description",
+      "has_image",
+      "sort_by",
+    ].forEach((name) => {
       const value = document.querySelector(`[name="${name}"]`).value.trim();
       if (value) params.set(name, value);
     });
-    if ($("#description-filter").checked) params.set("has_description", "true");
     if (state.explorerSourceId) params.set("source_id", state.explorerSourceId);
     if (state.explorerAttention) params.set("attention", state.explorerAttention);
     return params;
@@ -94,6 +106,28 @@ export function createExplorerController({ navigate }) {
       clearDashboardContext();
       state.page = 1;
       loadRecords();
+    });
+    $("#reset-filters").addEventListener("click", () => {
+      $("#search-form").reset();
+      clearDashboardContext();
+      state.page = 1;
+      loadRecords();
+    });
+    document.querySelectorAll("#search-form select").forEach((select) => {
+      select.addEventListener("change", () => {
+        clearDashboardContext();
+        state.page = 1;
+        loadRecords();
+      });
+    });
+    let queryTimer;
+    $("#query").addEventListener("input", () => {
+      window.clearTimeout(queryTimer);
+      queryTimer = window.setTimeout(() => {
+        clearDashboardContext();
+        state.page = 1;
+        loadRecords();
+      }, 300);
     });
     $("#previous-page").addEventListener("click", () => {
       state.page -= 1;

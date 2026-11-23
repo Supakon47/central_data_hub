@@ -28,26 +28,49 @@ function galleryImages(record) {
   return record.image_url ? [{ url: record.image_url, position: 1, origin: "legacy" }] : [];
 }
 
-function renderImageSection(record) {
+function renderImagePane(record) {
   const images = galleryImages(record);
   if (!images.length) {
-    return record.status_photographed
-      ? `<section class="image-unavailable"><h3>รูปภาพ</h3><p class="muted">ระบุว่าถ่ายภาพแล้ว แต่ยังไม่มีภาพที่นำเข้าในคลังกลาง</p></section>`
-      : "";
+    const message = record.status_photographed
+      ? "ระบุว่าถ่ายภาพแล้ว แต่ยังไม่มีภาพที่นำเข้าในคลังกลาง"
+      : "ยังไม่มีภาพสำหรับระเบียนนี้";
+    return `<section class="detail-media-pane image-unavailable"><p>${message}</p></section>`;
   }
-  const gallery = images.map((image, index) => {
+  const primary = images[0];
+  const thumbnails = images.map((image, index) => {
     const imageNumber = index + 1;
-    const origin = image.origin === "google_sheets_bridge" ? " · จาก Google Sheets" : "";
-    return `<a href="${escapeHtml(image.url)}" target="_blank" rel="noreferrer">
-      <img src="${escapeHtml(image.url)}" alt="ภาพที่ ${imageNumber} ของ ${compact(record.registration_no, "ระเบียน")}" loading="lazy">
-      <span>ภาพที่ ${imageNumber}${origin}</span>
-    </a>`;
+    return `<button class="detail-thumbnail${index === 0 ? " active" : ""}" type="button"
+      data-detail-image-url="${escapeHtml(image.url)}"
+      data-detail-image-alt="ภาพที่ ${imageNumber} ของ ${escapeHtml(record.registration_no || "ระเบียน")}">
+      <img src="${escapeHtml(image.url)}" alt="" loading="lazy">
+    </button>`;
   }).join("");
-  return `<section class="detail-image">
-    <h3>รูปภาพ <span class="muted">(${images.length.toLocaleString()} รูป)</span></h3>
-    <div class="image-gallery">${gallery}</div>
-    <p class="muted">คลิกภาพเพื่อเปิดขนาดเต็ม</p>
+  return `<section class="detail-media-pane">
+    <a id="detail-hero-link" class="detail-hero-link" href="${escapeHtml(primary.url)}" target="_blank" rel="noreferrer">
+      <img id="detail-hero-image" src="${escapeHtml(primary.url)}" alt="ภาพที่ 1 ของ ${escapeHtml(record.registration_no || "ระเบียน")}">
+    </a>
+    ${images.length > 1 ? `<div class="detail-thumbnails" aria-label="เลือกรูปภาพ">${thumbnails}</div>` : ""}
+    <p class="detail-image-caption">คลิกภาพเพื่อเปิดขนาดเต็ม · ${images.length.toLocaleString()} รูป</p>
   </section>`;
+}
+
+function statusBox(label, value, completedValue) {
+  const tone = !value ? "empty" : value === completedValue ? "complete" : "pending";
+  return `<article class="detail-status ${tone}">
+    <span>${label}</span><strong>${compact(value, "ไม่ได้บันทึก")}</strong>
+  </article>`;
+}
+
+function renderRecordNavigation(recordId) {
+  const index = state.lastItems.findIndex((item) => String(item.id) === String(recordId));
+  if (index < 0) return "";
+  const previous = state.lastItems[index - 1];
+  const next = state.lastItems[index + 1];
+  return `<div class="detail-record-navigation">
+    <button class="secondary" type="button" data-detail-record-id="${previous?.id ?? ""}" ${previous ? "" : "disabled"}>ก่อนหน้า</button>
+    <span>${(index + 1).toLocaleString()} / ${state.lastItems.length.toLocaleString()}</span>
+    <button type="button" data-detail-record-id="${next?.id ?? ""}" ${next ? "" : "disabled"}>ถัดไป</button>
+  </div>`;
 }
 
 function renderSourceDetails(rawRows) {
@@ -66,33 +89,55 @@ export function createDetailController({ bindRecordLinks, pushRoute, setView }) 
     state.currentDetailId = recordId;
     setView("detail");
     const fields = [
-      ["เลขทะเบียน", record.registration_no],
       ["เลขทะเบียนเดิม", record.previous_registration_no],
       ["รายการ", record.title_description],
       ["ขนาด", record.dimensions_text],
       ["ชนิด", record.material],
       ["อายุสมัย", record.period],
       ["ประวัติที่มา", record.provenance],
-      ["การตรวจสอบข้อมูล", record.status_data_check],
-      ["การถ่ายภาพ", record.status_photographed],
-      ["การลงระบบ Antique", record.status_antique],
-      ["การส่งขึ้นห้องคลัง", record.status_storage],
-      ["แหล่งข้อมูล", `${record.source_name || ""} / ${record.source_sheet} / แถว ${record.source_row_number}`],
     ];
     $("#detail-content").innerHTML = `<article class="detail-card">
-      <h2>${compact(record.registration_no, "ไม่มีเลขทะเบียน")}</h2>
       <div class="detail-layout">
-        <dl class="detail-grid detail-section">${renderFields(fields)}</dl>
-        ${renderImageSection(record)}
+        ${renderImagePane(record)}
+        <section class="detail-info-pane">
+          <p class="detail-accession">${compact(record.registration_no, "ไม่มีเลขทะเบียน")}</p>
+          <h2>${compact(record.title_description, "ไม่ระบุรายการ")}</h2>
+          <dl class="detail-grid">${renderFields(fields)}</dl>
+          <div class="detail-status-grid">
+            ${statusBox("การตรวจสอบข้อมูล", record.status_data_check, "ตรวจสอบแล้ว")}
+            ${statusBox("การถ่ายภาพ", record.status_photographed, "ถ่ายภาพแล้ว")}
+            ${statusBox("การลงระบบ Antique", record.status_antique, "ลงระบบแล้ว")}
+            ${statusBox("การส่งขึ้นห้องคลัง", record.status_storage, "ส่งขึ้นห้องคลังแล้ว")}
+          </div>
+          <p class="detail-source">${escapeHtml(`${record.source_name || ""} / ${record.source_sheet || ""} / แถว ${record.source_row_number || "-"}`)}</p>
+          ${renderRecordNavigation(record.id)}
+        </section>
       </div>
-      ${renderSourceDetails(renderRawDataRows(record.raw_data))}
-      <div class="detail-section">
-        <h3>ระเบียนที่อาจซ้ำ</h3>
-        <p class="muted">แสดงจากเลขทะเบียนเดียวกันเท่านั้น และไม่ยืนยันว่าเป็นข้อมูลชิ้นเดียวกัน</p>
-        ${renderDuplicateCandidates(record.duplicate_candidates)}
+      <div class="detail-extras">
+        ${renderSourceDetails(renderRawDataRows(record.raw_data))}
+        <div class="detail-section">
+          <h3>ระเบียนที่อาจซ้ำ</h3>
+          <p class="muted">แสดงจากเลขทะเบียนเดียวกันเท่านั้น และไม่ยืนยันว่าเป็นข้อมูลชิ้นเดียวกัน</p>
+          ${renderDuplicateCandidates(record.duplicate_candidates)}
+        </div>
       </div>
     </article>`;
     bindRecordLinks("#detail-content [data-record-id]");
+    document.querySelectorAll("[data-detail-record-id]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.dataset.detailRecordId) loadDetail(button.dataset.detailRecordId);
+      });
+    });
+    document.querySelectorAll(".detail-thumbnail").forEach((button) => {
+      button.addEventListener("click", () => {
+        $("#detail-hero-image").src = button.dataset.detailImageUrl;
+        $("#detail-hero-image").alt = button.dataset.detailImageAlt;
+        $("#detail-hero-link").href = button.dataset.detailImageUrl;
+        document.querySelectorAll(".detail-thumbnail").forEach((item) =>
+          item.classList.toggle("active", item === button),
+        );
+      });
+    });
   }
 
   return { loadDetail };
