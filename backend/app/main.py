@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from .admin_security import admin_access_configured, create_session_token, valid_session_token, verify_password
@@ -43,8 +43,17 @@ from .google_sheets import (
     normalise_spreadsheet_id,
 )
 from .inspect_google_image_bridge import inspect_google_image_bridge
-from .models import AuditLog, DataQualityIssue, DataSource, ImageBridgeConfig, Record, SourceSheetConfig, SyncRun
-from .normalization import clean_multiline_text, clean_text, normalise_image_url
+from .models import (
+    AuditLog,
+    DataQualityIssue,
+    DataSource,
+    ImageBridgeConfig,
+    LocationMatchReview,
+    Record,
+    SourceSheetConfig,
+    SyncRun,
+)
+from .normalization import clean_multiline_text, clean_text, normalise_header, normalise_image_url, normalise_registration_no
 from .record_images import image_summary, store_record_image, uploaded_image_suffix
 from .sync_google_sheet import sync_google_source
 from .sync_google_image_bridge import sync_google_image_bridge
@@ -75,6 +84,7 @@ ATTENTION_STATUS_FIELDS = {
     "antique": (Record.status_antique, "ลงระบบแล้ว"),
     "storage": (Record.status_storage, "ส่งขึ้นห้องคลังแล้ว"),
 }
+LOCATION_FIELD_ALIASES = ("สถานที่เก็บ", "ที่เก็บ", "ชั้นวาง", "ชั้น")
 
 MATERIAL_DISPLAY_ALIASES = {
     "หิo": "หิน",
@@ -109,6 +119,47 @@ PERIOD_DISPLAY_ALIASES = {
     "พุทธสตวรรษที่": "พุทธศตวรรษที่",
     "ล้านา": "ล้านนา",
 }
+
+# These groups are deliberately short, curated choices for discovery.  The
+# source values remain untouched; a group can therefore include several
+# spellings or composite materials without creating an overwhelming dropdown.
+MATERIAL_FILTER_GROUPS = (
+    ("metal", "โลหะ (ทุกชนิด)", ("โลหะ", "สำริด", "เงิน", "ทอง", "เหล็ก", "ตะกั่ว", "นิเกิล", "ดีบุก", "ทองเหลือง", "ทองแดง")),
+    ("bronze", "สำริด", ("สำริด",)),
+    ("silver", "เงิน", ("เงิน",)),
+    ("gold", "ทอง/ทองคำ", ("ทองคำ", "ทอง ")),
+    ("copper", "ทองแดง", ("ทองแดง",)),
+    ("brass", "ทองเหลือง", ("ทองเหลือง",)),
+    ("iron", "เหล็ก", ("เหล็ก",)),
+    ("lead-tin", "ตะกั่ว/ดีบุก", ("ตะกั่ว", "ดีบุก")),
+    ("terracotta", "ดินเผา", ("ดินเผา",)),
+    ("ceramic", "เครื่องเคลือบ/กระเบื้อง", ("เคลือบ", "กระเบื้อง", "พอร์ซเลน", "เซรามิก")),
+    ("stone", "หิน (ทุกชนิด)", ("หิน",)),
+    ("wood", "ไม้", ("ไม้",)),
+    ("textile", "ผ้า/สิ่งทอ", ("ผ้า", "ไหม", "ด้าย")),
+    ("plaster", "ปูน", ("ปูน",)),
+    ("glass", "แก้ว/กระจก", ("แก้ว", "กระจก")),
+    ("paper", "กระดาษ", ("กระดาษ",)),
+    ("leather", "หนัง", ("หนัง",)),
+    ("organic", "งา/กระดูก/เขา/เปลือกหอย", ("งา", "กระดูก", "เขา", "เปลือกหอย", "อินทรีย์")),
+    ("lacquer", "รัก/ลงรักปิดทอง", ("รัก",)),
+    ("modern", "พลาสติก/วัสดุสมัยใหม่", ("พลาสติก", "เรซิน")),
+)
+
+PERIOD_FILTER_GROUPS = (
+    ("prehistory", "ก่อนประวัติศาสตร์", ("ก่อนประวัติ",)),
+    ("dvaravati", "ทวารวดี", ("ทวารวดี",)),
+    ("srivijaya", "ศรีวิชัย", ("ศรีวิชัย",)),
+    ("lopburi", "ลพบุรี", ("ลพบุรี",)),
+    ("sukhothai", "สุโขทัย", ("สุโขทัย",)),
+    ("lanna", "ล้านนา", ("ล้านนา",)),
+    ("ayutthaya", "อยุธยา", ("อยุธยา",)),
+    ("thonburi", "ธนบุรี", ("ธนบุรี",)),
+    ("rattanakosin", "รัตนโกสินทร์", ("รัตนโกสินทร์",)),
+    ("china", "จีน", ("จีน",)),
+    ("japan", "ญี่ปุ่น", ("ญี่ปุ่น",)),
+    ("foreign", "ต่างประเทศ", ("ต่างประเทศ",)),
+)
 
 
 class AdminLogin(BaseModel):
@@ -166,6 +217,17 @@ class DataQualityIssueResolution(BaseModel):
     """A deliberate staff acknowledgement; source data is never edited here."""
 
     is_resolved: bool
+
+
+class LocationMatchReviewMutation(BaseModel):
+    """A staff decision about a proposed object-to-location relationship."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    object_record_id: int = Field(gt=0)
+    location_record_id: int = Field(gt=0)
+    decision: str = Field(pattern="^(approved|rejected)$")
+    note: str | None = Field(default=None, max_length=2000)
 
 
 @app.middleware("http")
@@ -336,6 +398,47 @@ def record_summary(record: Record) -> dict:
     }
 
 
+def record_location(record: Record) -> dict | None:
+    """Return a location value stored in source raw data, with its header.
+
+    Location is intentionally read from the source payload rather than copied
+    onto the object record. This preserves the source evidence and supports
+    several observations for one registration number.
+    """
+    for key, value in (record.raw_data or {}).items():
+        if normalise_header(key) not in LOCATION_FIELD_ALIASES:
+            continue
+        location = clean_multiline_text(value)
+        if location:
+            return {"field": key, "value": location}
+    return None
+
+
+def title_conflict(object_record: Record, location_record: Record) -> bool:
+    """Flag clearly different titles as a review aid, never as a rejection."""
+    object_title = clean_text(object_record.title_description)
+    location_title = clean_text(location_record.title_description)
+    if not object_title or not location_title:
+        return False
+    left = re.sub(r"\s+", "", unicodedata.normalize("NFKC", object_title)).casefold()
+    right = re.sub(r"\s+", "", unicodedata.normalize("NFKC", location_title)).casefold()
+    return left not in right and right not in left
+
+
+def location_review_summary(review: LocationMatchReview, object_record: Record, location_record: Record) -> dict:
+    return {
+        "id": review.id,
+        "decision": review.decision,
+        "note": review.note,
+        "reviewed_at": review.reviewed_at,
+        "object_record": record_summary(object_record),
+        "location_record": {
+            **record_summary(location_record),
+            "location": record_location(location_record),
+        },
+    }
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {
@@ -352,6 +455,73 @@ def health() -> dict:
     }
 
 
+def normalise_filter_display(value: str, aliases: dict[str, str]) -> str:
+    """Clean values only for matching and display; never alter source data."""
+    value = unicodedata.normalize("NFKC", value)
+    value = value.replace("\u200b", "").replace("\ufeff", "").replace("\u00a0", " ")
+    value = re.sub(r"([ิีึืุู็่้๊๋ั])\1+", r"\1", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"\s*-\s*", " - ", value)
+    for variant, replacement in aliases.items():
+        value = value.replace(variant, replacement)
+    return value
+
+
+def group_matches(value: str, terms: tuple[str, ...]) -> bool:
+    comparable = f"{value.casefold()} "
+    return any(term.casefold() in comparable for term in terms)
+
+
+def group_option_items(session: Session, column, groups, aliases, empty_label: str) -> list[dict]:
+    """Return concise discovery groups with counts, instead of every raw value."""
+    counts: Counter[str] = Counter()
+    for raw_value in session.scalars(select(column)).all():
+        if not raw_value or not raw_value.strip():
+            counts["none"] += 1
+            continue
+        value = normalise_filter_display(raw_value, aliases)
+        matched = False
+        for group_value, _, terms in groups:
+            if group_matches(value, terms):
+                counts[group_value] += 1
+                matched = True
+        if not matched:
+            counts["other"] += 1
+
+    items = []
+    if counts["none"]:
+        items.append({"value": "none", "label": empty_label, "count": counts["none"]})
+    items.extend(
+        {"value": value, "label": label, "count": counts[value]}
+        for value, label, _ in groups
+        if counts[value]
+    )
+    if counts["other"]:
+        items.append({"value": "other", "label": "อื่น ๆ", "count": counts["other"]})
+    return items
+
+
+def group_filter_condition(column, group_value: str, groups, aliases: dict[str, str]):
+    """Build a tolerant database predicate for one curated filter group."""
+    group_by_value = {value: terms for value, _, terms in groups}
+    if group_value == "none":
+        return or_(column.is_(None), column == "")
+
+    all_terms = tuple(term for _, _, terms in groups for term in terms)
+    if group_value == "other":
+        patterns = [column.ilike(f"%{term}%") for term in all_terms]
+        return and_(column.is_not(None), column != "", not_(or_(*patterns)))
+
+    terms = group_by_value.get(group_value)
+    if terms is None:
+        raise HTTPException(status_code=422, detail="กลุ่มตัวกรองไม่ถูกต้อง")
+    tolerant_terms = list(terms)
+    for variant, replacement in aliases.items():
+        if any(term in replacement for term in terms):
+            tolerant_terms.append(variant)
+    return or_(*(column.ilike(f"%{term}%") for term in tolerant_terms))
+
+
 @app.get("/api/records")
 def list_records(
     session: Annotated[Session, Depends(get_session)],
@@ -360,6 +530,8 @@ def list_records(
     source_sheet: str | None = None,
     material: str | None = None,
     period: str | None = None,
+    material_group: str | None = None,
+    period_group: str | None = None,
     status_data_check: str | None = None,
     status_photographed: str | None = None,
     status_antique: str | None = None,
@@ -395,6 +567,24 @@ def list_records(
             statement = statement.where(or_(column.is_(None), column == ""))
         elif value is not None:
             statement = statement.where(column == value)
+    if material_group:
+        statement = statement.where(
+            group_filter_condition(
+                Record.material,
+                material_group,
+                MATERIAL_FILTER_GROUPS,
+                MATERIAL_DISPLAY_ALIASES,
+            )
+        )
+    if period_group:
+        statement = statement.where(
+            group_filter_condition(
+                Record.period,
+                period_group,
+                PERIOD_FILTER_GROUPS,
+                PERIOD_DISPLAY_ALIASES,
+            )
+        )
     for column, value in [(Record.material, material), (Record.period, period)]:
         if value is not None:
             compact_column = func.replace(
@@ -475,39 +665,6 @@ def list_records(
 
 @app.get("/api/filter-options")
 def filter_options(session: Annotated[Session, Depends(get_session)]) -> dict:
-    repeated_thai_mark_pattern = r"([ิีึืุู็่้๊๋ั])\1+"
-
-    def collapse_duplicate_thai_marks(value: str) -> str:
-        return re.sub(repeated_thai_mark_pattern, r"\1", value)
-
-    def normalise_display_value(value: str, aliases: dict[str, str]) -> str:
-        value = unicodedata.normalize("NFKC", value)
-        value = value.replace("\u200b", "").replace("\ufeff", "").replace("\u00a0", " ")
-        value = collapse_duplicate_thai_marks(value)
-        value = re.sub(r"\s+", " ", value).strip()
-        value = re.sub(r"\s*-\s*", " - ", value)
-        for variant, replacement in aliases.items():
-            value = value.replace(variant, replacement)
-        return value
-
-    def comparison_key(value: str) -> str:
-        return re.sub(r"\s+", "", value).casefold()
-
-    def distinct_values(column, aliases: dict[str, str]) -> list[str]:
-        rows = session.scalars(
-            select(column)
-            .where(column.is_not(None), column != "")
-            .distinct()
-            .order_by(column)
-        ).all()
-        unique: dict[str, str] = {}
-        for value in rows:
-            if not value or not value.strip():
-                continue
-            display = normalise_display_value(value, aliases)
-            unique.setdefault(comparison_key(display), display)
-        return sorted(unique.values(), key=str.casefold)
-
     registration_year_counts = Counter()
     current_buddhist_year = datetime.now().year + 543
     registration_numbers = session.scalars(
@@ -519,8 +676,20 @@ def filter_options(session: Annotated[Session, Depends(get_session)]) -> dict:
             registration_year_counts[match.group(1)] += 1
 
     return {
-        "materials": distinct_values(Record.material, MATERIAL_DISPLAY_ALIASES),
-        "periods": distinct_values(Record.period, PERIOD_DISPLAY_ALIASES),
+        "material_groups": group_option_items(
+            session,
+            Record.material,
+            MATERIAL_FILTER_GROUPS,
+            MATERIAL_DISPLAY_ALIASES,
+            "ไม่ระบุชนิด",
+        ),
+        "period_groups": group_option_items(
+            session,
+            Record.period,
+            PERIOD_FILTER_GROUPS,
+            PERIOD_DISPLAY_ALIASES,
+            "ไม่ระบุ",
+        ),
         "registration_years": [
             {"label": year, "count": count}
             for year, count in sorted(registration_year_counts.items(), reverse=True)
@@ -539,6 +708,27 @@ def get_record(record_id: int, session: Annotated[Session, Depends(get_session)]
             Record.registration_no == record.registration_no,
             Record.id != record.id,
         ).limit(20)).all()
+    linked_reviews = session.scalars(
+        select(LocationMatchReview).where(
+            LocationMatchReview.decision == "approved",
+            or_(
+                LocationMatchReview.object_record_id == record.id,
+                LocationMatchReview.location_record_id == record.id,
+            ),
+        )
+    ).all()
+    linked_locations = []
+    for review in linked_reviews:
+        location_record = session.get(Record, review.location_record_id)
+        if location_record is None:
+            continue
+        linked_locations.append({
+            "review_id": review.id,
+            "note": review.note,
+            "reviewed_at": review.reviewed_at,
+            "location": record_location(location_record),
+            "source": record_summary(location_record),
+        })
     return {
         **record_summary(record),
         "dimensions_text": record.dimensions_text,
@@ -549,6 +739,54 @@ def get_record(record_id: int, session: Annotated[Session, Depends(get_session)]
         "raw_data": record.raw_data,
         "images": [image_summary(image) for image in record.images],
         "duplicate_candidates": [record_summary(candidate) for candidate in duplicates],
+        "linked_locations": linked_locations,
+    }
+
+
+@app.get("/api/location-match-candidates")
+def list_location_match_candidates(
+    session: Annotated[Session, Depends(get_session)],
+    source_id: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict:
+    """Find reviewable links; this endpoint never creates a relationship."""
+    statement = select(Record).where(Record.registration_no.is_not(None), Record.registration_no != "")
+    if source_id:
+        statement = statement.where(Record.source_id == source_id)
+    records = session.scalars(statement).all()
+    groups: dict[str, list[Record]] = {}
+    for candidate in records:
+        key = normalise_registration_no(candidate.registration_no)
+        if key:
+            groups.setdefault(key, []).append(candidate)
+
+    reviewed_pairs = {
+        (review.object_record_id, review.location_record_id): review
+        for review in session.scalars(select(LocationMatchReview)).all()
+    }
+    items = []
+    for registration_no, candidates in sorted(groups.items()):
+        location_records = [candidate for candidate in candidates if record_location(candidate)]
+        object_records = [candidate for candidate in candidates if not record_location(candidate)]
+        for object_record in object_records:
+            for location_record in location_records:
+                review = reviewed_pairs.get((object_record.id, location_record.id))
+                if review is not None:
+                    continue
+                items.append({
+                    "registration_no": registration_no,
+                    "object_record": record_summary(object_record),
+                    "location_record": {
+                        **record_summary(location_record),
+                        "location": record_location(location_record),
+                    },
+                    "title_conflict": title_conflict(object_record, location_record),
+                    "requires_review": True,
+                })
+    return {
+        "total": len(items),
+        "items": items[:limit],
+        "message": "รายการนี้เป็นเพียงข้อเสนอการจับคู่ ยังไม่เปลี่ยนข้อมูลตำแหน่งของวัตถุ",
     }
 
 
@@ -788,6 +1026,67 @@ def resolve_data_quality_issue(
     )
     session.commit()
     return {"id": issue.id, "is_resolved": issue.is_resolved}
+
+
+@app.post("/api/admin/location-match-reviews")
+def review_location_match(
+    payload: LocationMatchReviewMutation,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Approve or reject one proposed relationship without merging source rows."""
+    object_record = session.get(Record, payload.object_record_id)
+    location_record = session.get(Record, payload.location_record_id)
+    if object_record is None or location_record is None:
+        raise HTTPException(status_code=404, detail="ไม่พบระเบียนที่ใช้ตรวจการจับคู่")
+    object_key = normalise_registration_no(object_record.registration_no)
+    location_key = normalise_registration_no(location_record.registration_no)
+    if not object_key or object_key != location_key:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="เลขทะเบียนของสองระเบียนไม่ตรงกัน จึงไม่สามารถบันทึกผลการตรวจได้",
+        )
+    if record_location(location_record) is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ระเบียนที่เลือกไม่มีข้อมูลตำแหน่งจากต้นทาง",
+        )
+
+    review = session.scalar(select(LocationMatchReview).where(
+        LocationMatchReview.object_record_id == object_record.id,
+        LocationMatchReview.location_record_id == location_record.id,
+    ))
+    before = None
+    if review is None:
+        review = LocationMatchReview(
+            object_record_id=object_record.id,
+            location_record_id=location_record.id,
+        )
+        session.add(review)
+        session.flush()
+    else:
+        before = {"decision": review.decision, "note": review.note}
+    review.decision = payload.decision
+    review.note = clean_multiline_text(payload.note)
+    review.reviewed_at = datetime.now()
+    session.flush()
+    after = {
+        "decision": review.decision,
+        "note": review.note,
+        "object_record_id": object_record.id,
+        "location_record_id": location_record.id,
+        "registration_no": object_record.registration_no,
+    }
+    add_audit(
+        session,
+        "review_location_match",
+        review.id,
+        before,
+        after,
+        entity_type="location_match_review",
+    )
+    session.commit()
+    return location_review_summary(review, object_record, location_record)
 
 
 @app.get("/api/admin/session")

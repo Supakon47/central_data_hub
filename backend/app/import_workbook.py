@@ -19,14 +19,14 @@ from .normalization import clean_multiline_text, clean_text, normalise_header, n
 
 
 FIELD_ALIASES = {
-    "registration_no": ("เลขทะเบียน", "."),
-    "previous_registration_no": ("เลขทะเบียนเดิม",),
-    "title_description": ("รายการ",),
-    "dimensions_text": ("ขนาด ซ.ม.",),
-    "material": ("ชนิด",),
-    "period": ("อายุสมัย",),
-    "provenance": ("ประวัติที่มา",),
-    "image_url": ("รูปภาพ", "image_url", "ลิงก์รูปภาพ", "URL รูปภาพ"),
+    "registration_no": ("เลขทะเบียน", "ทะเบียน", "เลขวัตถุ", "เลขประจำวัตถุ", "."),
+    "previous_registration_no": ("เลขทะเบียนเดิม", "เลขเดิม"),
+    "title_description": ("รายการ", "ชื่อ", "ชื่อวัตถุ", "ชื่อโบราณวัตถุ", "รายละเอียด"),
+    "dimensions_text": ("ขนาด ซ.ม.", "ขนาด"),
+    "material": ("ชนิด", "วัสดุ"),
+    "period": ("อายุสมัย", "ยุคสมัย/ศิลปะ"),
+    "provenance": ("ประวัติที่มา", "ประวัติ"),
+    "image_url": ("รูปภาพ", "รูป", "รูปถ่าย", "image_url", "ลิงก์รูปภาพ", "URL รูปภาพ"),
     "status_data_check": ("การตรวจสอบข้อมูล",),
     "status_photographed": ("การถ่ายภาพแล้ว",),
     "status_antique": ("การลงระบบ Antique",),

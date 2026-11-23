@@ -182,6 +182,31 @@ class DataQualityIssue(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class LocationMatchReview(Base):
+    """A staff decision about linking an object record to a storage record.
+
+    The two source records remain independent.  This table stores only the
+    reviewed relationship so a location is never inferred or merged silently.
+    """
+
+    __tablename__ = "location_match_reviews"
+    __table_args__ = (
+        UniqueConstraint("object_record_id", "location_record_id", name="uq_location_match_pair"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    object_record_id: Mapped[int] = mapped_column(ForeignKey("records.id"), index=True)
+    location_record_id: Mapped[int] = mapped_column(ForeignKey("records.id"), index=True)
+    decision: Mapped[str] = mapped_column(String(20), default="approved", index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class AuditLog(Base):
     """Append-only record of central-copy edits made through the admin page."""
 

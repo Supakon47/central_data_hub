@@ -23,6 +23,20 @@ function renderDuplicateCandidates(candidates) {
   </li>`).join("")}</ul>`;
 }
 
+function renderLinkedLocations(locations) {
+  if (!locations?.length) {
+    return `<p class="muted">ยังไม่มีตำแหน่งที่เจ้าหน้าที่อนุมัติการเชื่อม</p>`;
+  }
+  return `<ul class="linked-locations">${locations.map((item) => {
+    const source = item.source || {};
+    return `<li>
+      <strong>${escapeHtml(item.location?.value || "ไม่ระบุตำแหน่ง")}</strong>
+      <span>${escapeHtml(`${source.source_name || ""} / ${source.source_sheet || ""} / แถว ${source.source_row_number || "-"}`)}</span>
+      ${item.note ? `<small>${escapeHtml(item.note)}</small>` : ""}
+    </li>`;
+  }).join("")}</ul>`;
+}
+
 function galleryImages(record) {
   if (record.images?.length) return record.images;
   return record.image_url ? [{ url: record.image_url, position: 1, origin: "legacy" }] : [];
@@ -115,6 +129,11 @@ export function createDetailController({ bindRecordLinks, pushRoute, setView }) 
       </div>
       <div class="detail-extras">
         ${renderSourceDetails(renderRawDataRows(record.raw_data))}
+        <div class="detail-section">
+          <h3>ตำแหน่งจัดเก็บที่ยืนยันแล้ว</h3>
+          <p class="muted">แสดงเฉพาะความสัมพันธ์ที่ผู้ดูแลอนุมัติจากหลักฐานต้นทาง ไม่ใช่การแก้ไข Excel ต้นฉบับ</p>
+          ${renderLinkedLocations(record.linked_locations)}
+        </div>
         <div class="detail-section">
           <h3>ระเบียนที่อาจซ้ำ</h3>
           <p class="muted">แสดงจากเลขทะเบียนเดียวกันเท่านั้น และไม่ยืนยันว่าเป็นข้อมูลชิ้นเดียวกัน</p>

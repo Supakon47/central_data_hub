@@ -15,7 +15,7 @@ import { fetchGoogleSourceState, fillGoogleSourceForm, renderGoogleSourceCard, r
 import { adminFetch } from "./api.js";
 import { pushRoute, routeFromLocation } from "./router.js";
 
-const BUILD_VERSION = "2026.11.23.1";
+const BUILD_VERSION = "2026.11.23.2";
 
 // Keep card pages even at the common six-card desktop layout.
 state.pageSize = 24;
@@ -446,15 +446,18 @@ async function loadFilterOptions() {
   setOptions("#photo-filter", data.by_photo);
   setOptions("#antique-filter", data.by_antique);
   setOptions("#storage-filter", data.by_storage);
-  const setTextOptions = (target, items) => {
+  const setGroupedOptions = (target, items) => {
     const select = $(target);
     const placeholder = select.options[0].outerHTML;
     select.innerHTML = `${placeholder}${items
-      .map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`)
+      .map(
+        (item) =>
+          `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)} (${item.count.toLocaleString()})</option>`,
+      )
       .join("")}`;
   };
-  setTextOptions("#material-filter", filterData.materials);
-  setTextOptions("#period-filter", filterData.periods);
+  setGroupedOptions("#material-filter", filterData.material_groups);
+  setGroupedOptions("#period-filter", filterData.period_groups);
 }
 async function initialise() {
   const health = await (await fetch("/api/health")).json();

@@ -16,6 +16,8 @@ NS = {
     "package_rel": "http://schemas.openxmlformats.org/package/2006/relationships",
     "drawing": "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
     "drawing_main": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "rich_value_rel": "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel",
+    "rich_data": "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata",
 }
 SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
 
@@ -57,6 +59,76 @@ def _source_key(source_name: str) -> str:
     return sha256(source_name.encode("utf-8")).hexdigest()[:16]
 
 
+def _cell_coordinates(reference: str) -> tuple[int, int] | None:
+    """Return zero-based ``(column, row)`` from an A1 cell reference."""
+    letters = "".join(character for character in reference if character.isalpha())
+    digits = "".join(character for character in reference if character.isdigit())
+    if not letters or not digits:
+        return None
+    column = 0
+    for character in letters.upper():
+        column = column * 26 + ord(character) - ord("A") + 1
+    return column - 1, int(digits)
+
+
+def _rich_value_media_parts(archive: zipfile.ZipFile) -> dict[int, str]:
+    """Map an Excel Rich Data value index to its image package part.
+
+    Newer Excel versions store *Image in Cell* values in ``xl/richData``. A
+    worksheet cell references metadata, metadata references a rich value, and
+    that rich value references the image relationship. The original importer
+    only understood drawing anchors, so these images were invisible to it.
+    """
+    relations_root = _entry_xml(archive, "xl/richData/richValueRel.xml")
+    values_root = _entry_xml(archive, "xl/richData/rdrichvalue.xml")
+    if relations_root is None or values_root is None:
+        return {}
+    relationship_ids = [
+        item.attrib.get(f"{{{NS['rel']}}}id")
+        for item in relations_root.findall("rich_value_rel:rel", NS)
+    ]
+    package_relationships = _relationships(
+        archive,
+        "xl/richData/_rels/richValueRel.xml.rels",
+    )
+    media_parts: dict[int, str] = {}
+    for value_index, rich_value in enumerate(values_root.findall("rich_data:rv", NS)):
+        fields = rich_value.findall("rich_data:v", NS)
+        if not fields:
+            continue
+        try:
+            relationship_index = int(fields[0].text or "")
+        except ValueError:
+            continue
+        if not 0 <= relationship_index < len(relationship_ids):
+            continue
+        relationship_id = relationship_ids[relationship_index]
+        target = package_relationships.get(relationship_id or "")
+        if target:
+            media_parts[value_index] = _resolve("xl/richData/richValueRel.xml", target)
+    return media_parts
+
+
+def _metadata_rich_value_indexes(archive: zipfile.ZipFile) -> dict[int, int]:
+    """Map the one-based worksheet ``vm`` value to a Rich Data value index."""
+    metadata = _entry_xml(archive, "xl/metadata.xml")
+    if metadata is None:
+        return {}
+    value_metadata = metadata.find("main:valueMetadata", NS)
+    if value_metadata is None:
+        return {}
+    indexes: dict[int, int] = {}
+    for metadata_index, block in enumerate(value_metadata.findall("main:bk", NS), start=1):
+        reference = block.find("main:rc", NS)
+        if reference is None:
+            continue
+        try:
+            indexes[metadata_index] = int(reference.attrib.get("v", ""))
+        except ValueError:
+            continue
+    return indexes
+
+
 def extract_embedded_images(
     workbook_path: Path,
     source_name: str,
@@ -84,10 +156,29 @@ def extract_embedded_images(
                 sheets[sheet.attrib["name"]] = _resolve("xl/workbook.xml", workbook_rels[relationship_id])
 
         candidates: dict[tuple[str, int], list[str]] = defaultdict(list)
+        rich_media_parts = _rich_value_media_parts(archive)
+        rich_value_indexes = _metadata_rich_value_indexes(archive)
         for sheet_name, sheet_part in sheets.items():
             expected_column = photo_columns_by_sheet.get(sheet_name)
             if expected_column is None:
                 continue
+            worksheet = _entry_xml(archive, sheet_part)
+            if worksheet is not None and rich_media_parts and rich_value_indexes:
+                for cell in worksheet.findall(".//main:c", NS):
+                    coordinates = _cell_coordinates(cell.attrib.get("r", ""))
+                    metadata_value = cell.attrib.get("vm")
+                    if coordinates is None or not metadata_value:
+                        continue
+                    column, row_number = coordinates
+                    if column != expected_column:
+                        continue
+                    try:
+                        rich_value_index = rich_value_indexes[int(metadata_value)]
+                    except (KeyError, ValueError):
+                        continue
+                    media_part = rich_media_parts.get(rich_value_index)
+                    if media_part and Path(media_part).suffix.lower() in SUPPORTED_SUFFIXES:
+                        candidates[(sheet_name, row_number)].append(media_part)
             sheet_rels = _relationships(archive, _relationship_name(sheet_part))
             drawing_targets = [
                 _resolve(sheet_part, target) for target in sheet_rels.values()
