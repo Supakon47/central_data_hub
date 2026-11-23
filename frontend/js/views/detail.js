@@ -37,6 +37,29 @@ function renderLinkedLocations(locations) {
   }).join("")}</ul>`;
 }
 
+// Where the object is stored: the record's own location when it comes from a
+// storage-room list, otherwise the locations staff approved for it.
+function storageLocations(record) {
+  if (record.location?.value) {
+    return [{ room: record.source_name, shelf: record.location.value }];
+  }
+  return (record.linked_locations || [])
+    .filter((item) => item.location?.value)
+    .map((item) => ({ room: item.source?.source_name, shelf: item.location.value }));
+}
+
+function storageFields(record) {
+  const locations = storageLocations(record);
+  if (!locations.length) {
+    return [["ห้องจัดเก็บ", null], ["ชั้นวาง", null]];
+  }
+  const unique = (values) => [...new Set(values.filter(Boolean))].join("\n");
+  return [
+    ["ห้องจัดเก็บ", unique(locations.map((item) => item.room))],
+    ["ชั้นวาง", unique(locations.map((item) => item.shelf))],
+  ];
+}
+
 function galleryImages(record) {
   if (record.images?.length) return record.images;
   return record.image_url ? [{ url: record.image_url, position: 1, origin: "legacy" }] : [];
@@ -109,6 +132,7 @@ export function createDetailController({ bindRecordLinks, pushRoute, setView }) 
       ["ชนิด", record.material],
       ["อายุสมัย", record.period],
       ["ประวัติที่มา", record.provenance],
+      ...storageFields(record),
     ];
     $("#detail-content").innerHTML = `<article class="detail-card">
       <div class="detail-layout">

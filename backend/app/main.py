@@ -739,6 +739,8 @@ def get_record(record_id: int, session: Annotated[Session, Depends(get_session)]
         "raw_data": record.raw_data,
         "images": [image_summary(image) for image in record.images],
         "duplicate_candidates": [record_summary(candidate) for candidate in duplicates],
+        # The record's own storage location when its source is a storage-room list.
+        "location": record_location(record),
         "linked_locations": linked_locations,
     }
 
