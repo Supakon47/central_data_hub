@@ -1,4 +1,5 @@
-import { adminFetch } from "../api.js";
+// Record detail: fields, images, storage location and possible duplicates.
+import { adminFetch, fetchAdminSession, getJson } from "../api.js";
 import { $, compact, escapeHtml } from "../core/dom.js";
 import { state } from "../core/state.js";
 
@@ -125,8 +126,8 @@ export function createDetailController({ bindRecordLinks, pushRoute, setView }) 
   async function loadDetail(recordId, updateHistory = true) {
     if (updateHistory) pushRoute("detail", recordId);
     const [record, adminSession] = await Promise.all([
-      fetch(`/api/records/${recordId}`).then((response) => response.json()),
-      fetch("/api/admin/session").then((response) => (response.ok ? response.json() : {})).catch(() => ({})),
+      getJson(`/api/records/${recordId}`),
+      fetchAdminSession(),
     ]);
     state.currentDetailId = recordId;
     setView("detail");
@@ -171,12 +172,12 @@ export function createDetailController({ bindRecordLinks, pushRoute, setView }) 
       </div>
     </article>`;
     bindRecordLinks("#detail-content [data-record-id]");
-    document.querySelectorAll("[data-detail-record-id]").forEach((button) => {
+    document.querySelectorAll("#detail-content [data-detail-record-id]").forEach((button) => {
       button.addEventListener("click", () => {
         if (button.dataset.detailRecordId) loadDetail(button.dataset.detailRecordId);
       });
     });
-    document.querySelectorAll("[data-detail-review-undo]").forEach((button) => {
+    document.querySelectorAll("#detail-content [data-detail-review-undo]").forEach((button) => {
       button.addEventListener("click", async () => {
         if (!window.confirm("ยกเลิกการเชื่อมตำแหน่งนี้ใช่หรือไม่? คู่นี้จะกลับไปอยู่ในรายการรอตรวจ และไม่แก้ Excel ต้นทาง")) return;
         try {

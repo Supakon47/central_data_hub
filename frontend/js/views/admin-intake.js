@@ -1,13 +1,10 @@
-import { adminFetch } from "../api.js";
-import { $, escapeHtml } from "../core/dom.js";
+// Admin page: attach a batch of image files to records by their record_id file names.
+import { adminFetch, uploadForm } from "../api.js";
+import { $, escapeHtml, setBusy, showMessage as showStatus } from "../core/dom.js";
 import { state } from "../core/state.js";
 
 export function createImageIntakeController({ loadAudit, loadDashboard, loadRecords }) {
-  function showMessage(message = "", isError = false) {
-    const target = $("#admin-image-intake-message");
-    target.textContent = message;
-    target.classList.toggle("error", isError);
-  }
+  const showMessage = (message, isError) => showStatus("#admin-image-intake-message", message, isError);
 
   function renderSheets() {
     const sourceSelect = $("#admin-image-intake-source");
@@ -41,24 +38,15 @@ export function createImageIntakeController({ loadAudit, loadDashboard, loadReco
       showMessage("เลือกแหล่งข้อมูล ชีต และไฟล์รูปภาพก่อน", true);
       return;
     }
-    const button = event.currentTarget.querySelector("button[type='submit']");
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = "กำลังนำภาพเข้า…";
+    // currentTarget is cleared once the handler awaits, so keep the form now.
+    const formElement = event.currentTarget;
+    const restore = setBusy(formElement.querySelector("button[type='submit']"), "กำลังนำภาพเข้า…");
     showMessage("กำลังจับคู่ชื่อไฟล์กับ record_id โดยไม่แก้ Google Sheets…");
     try {
       const form = new FormData();
       form.append("sheet_name", sheetName);
       [...files].forEach((file) => form.append("images", file));
-      const response = await fetch(`/api/admin/image-intake/${sourceId}`, {
-        method: "POST",
-        body: form,
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.detail || "นำภาพเข้าไม่สำเร็จ");
-      }
-      const result = await response.json();
+      const result = await uploadForm(`/api/admin/image-intake/${sourceId}`, form, "นำภาพเข้าไม่สำเร็จ");
       const notes = [`นำเข้าแล้ว ${result.uploaded.toLocaleString()} ภาพ`];
       if (result.unmatched_count) {
         notes.push(`ไม่พบ record_id ${result.unmatched_count.toLocaleString()} รายการ: ${result.unmatched.join(", ")}${result.unmatched_count > result.unmatched.length ? "…" : ""}`);
@@ -67,14 +55,13 @@ export function createImageIntakeController({ loadAudit, loadDashboard, loadReco
         notes.push(`ข้ามไฟล์ ${result.invalid_count.toLocaleString()} ไฟล์: ${result.invalid_files.join(", ")}${result.invalid_count > result.invalid_files.length ? "…" : ""}`);
       }
       showMessage(notes.join(" · "), Boolean(result.unmatched_count || result.invalid_count));
-      event.currentTarget.reset();
+      formElement.reset();
       renderSheets();
       await Promise.all([loadRecords(), loadDashboard(), loadAudit()]);
     } catch (error) {
       showMessage(error.message, true);
     } finally {
-      button.disabled = false;
-      button.textContent = originalText;
+      restore();
     }
   }
 

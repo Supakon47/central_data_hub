@@ -1,16 +1,9 @@
-import { adminFetch } from "../api.js";
-import { $, compact, escapeHtml } from "../core/dom.js";
+// Data Catalog: every source with its sync state, and admin actions on each.
+import { adminFetch, fetchAdminSession, getJson } from "../api.js";
+import { $, compact, escapeHtml, setBusy, showMessage } from "../core/dom.js";
+import { syncScheduleLabel } from "./admin-sync-schedule.js";
 
-function syncScheduleLabel(minutes) {
-  const labels = new Map([
-    [15, "ทุก 15 นาที"],
-    [30, "ทุก 30 นาที"],
-    [60, "ทุก 1 ชั่วโมง"],
-    [360, "ทุก 6 ชั่วโมง"],
-    [1440, "ทุก 1 วัน"],
-  ]);
-  return labels.get(Number(minutes)) || `ทุก ${Number(minutes).toLocaleString()} นาที`;
-}
+const LIST = "#catalog-list";
 
 export function createCatalogController({
   loadAdminGoogleSources,
@@ -20,11 +13,7 @@ export function createCatalogController({
   loadRecords,
   syncImageBridge,
 }) {
-  function catalogMessage(message = "", isError = false) {
-    const target = $("#catalog-message");
-    target.textContent = message;
-    target.classList.toggle("error", isError);
-  }
+  const catalogMessage = (message, isError) => showMessage("#catalog-message", message, isError);
 
   function renderCatalogActions(source, bridge, canSyncFromWeb, isAdmin) {
     if (
@@ -96,34 +85,26 @@ export function createCatalogController({
   }
 
   function bindCatalogActions() {
-    document.querySelectorAll("[data-google-sync-source]").forEach((button) => {
-      button.addEventListener("click", () => syncGoogleSource(button));
-    });
-    document
-      .querySelectorAll("[data-image-bridge-sync-source]")
-      .forEach((button) => {
-        button.addEventListener("click", () => syncImageBridge(button));
+    const bind = (attribute, handler) => {
+      document.querySelectorAll(`${LIST} [${attribute}]`).forEach((button) => {
+        button.addEventListener("click", () => handler(button));
       });
-    document.querySelectorAll("[data-clear-source]").forEach((button) => {
-      button.addEventListener("click", () => clearCentralData(button));
-    });
-    document.querySelectorAll("[data-delete-google-source]").forEach((button) => {
-      button.addEventListener("click", () => deleteGoogleSource(button));
-    });
+    };
+    bind("data-google-sync-source", syncGoogleSource);
+    bind("data-image-bridge-sync-source", syncImageBridge);
+    bind("data-clear-source", clearCentralData);
+    bind("data-delete-google-source", deleteGoogleSource);
   }
 
   async function loadCatalog() {
-    const [catalogResponse, sessionResponse, healthResponse] = await Promise.all([
-      fetch("/api/catalog"),
-      fetch("/api/admin/session"),
-      fetch("/api/health"),
+    const [data, adminSession, health] = await Promise.all([
+      getJson("/api/catalog"),
+      fetchAdminSession(),
+      getJson("/api/health"),
     ]);
-    const data = await catalogResponse.json();
-    const adminSession = await sessionResponse.json();
-    const health = await healthResponse.json();
     const canSyncFromWeb =
       adminSession.authenticated && health.google_sheets_web_sync_available;
-    $("#catalog-list").innerHTML =
+    $(LIST).innerHTML =
       data.sources
         .map((source) =>
           renderCatalogSource(source, canSyncFromWeb, adminSession.authenticated),
@@ -140,9 +121,7 @@ export function createCatalogController({
       )
     ) return;
 
-    button.disabled = true;
-    const originalText = button.textContent;
-    button.textContent = "กำลัง Sync…";
+    const restore = setBusy(button, "กำลัง Sync…");
     catalogMessage("กำลังอ่านข้อมูลจาก Google Sheets…");
     try {
       const result = await adminFetch(
@@ -160,8 +139,7 @@ export function createCatalogController({
       await Promise.all([loadCatalog(), loadRecords(), loadFilterOptions()]);
     } catch (error) {
       catalogMessage(error.message, true);
-      button.disabled = false;
-      button.textContent = originalText;
+      restore();
     }
   }
 
@@ -177,9 +155,7 @@ export function createCatalogController({
       )
     ) return;
 
-    button.disabled = true;
-    const originalText = button.textContent;
-    button.textContent = "กำลังล้าง…";
+    const restore = setBusy(button, "กำลังล้าง…");
     catalogMessage("กำลังล้างข้อมูลจาก Data Hub…");
     try {
       const result = await adminFetch(
@@ -202,8 +178,7 @@ export function createCatalogController({
       ]);
     } catch (error) {
       catalogMessage(error.message, true);
-      button.disabled = false;
-      button.textContent = originalText;
+      restore();
     }
   }
 
@@ -211,9 +186,7 @@ export function createCatalogController({
     const sourceName = button.dataset.sourceName || "";
     if (!window.confirm(`ยืนยันว่าต้องการลบการเชื่อมต่อ “${sourceName}” ใช่หรือไม่?`)) return;
 
-    button.disabled = true;
-    const originalText = button.textContent;
-    button.textContent = "กำลังลบ…";
+    const restore = setBusy(button, "กำลังลบ…");
     catalogMessage("กำลังลบการเชื่อมต่อออกจาก Data Hub…");
     try {
       const result = await adminFetch(
@@ -233,8 +206,7 @@ export function createCatalogController({
       ]);
     } catch (error) {
       catalogMessage(error.message, true);
-      button.disabled = false;
-      button.textContent = originalText;
+      restore();
     }
   }
 

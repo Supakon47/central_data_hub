@@ -24,3 +24,21 @@ export function renderMetric(label, value) {
     <span class="number">${value.toLocaleString()}</span>
   </article>`;
 }
+
+// Show a status line under a form or list; an empty message clears it.
+export function showMessage(selector, message = "", isError = false) {
+  const target = $(selector);
+  target.textContent = message;
+  target.classList.toggle("error", isError);
+}
+
+// Disable a button and show progress text while work runs; returns a function that undoes it.
+export function setBusy(button, busyText) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = busyText;
+  return () => {
+    button.disabled = false;
+    button.textContent = originalText;
+  };
+}

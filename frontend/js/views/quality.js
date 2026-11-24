@@ -1,4 +1,5 @@
-import { adminFetch } from "../api.js";
+// Data quality: import issues, the location match report, and the location review queue.
+import { adminFetch, fetchAdminSession } from "../api.js";
 import { $, compact, escapeHtml, renderMetric } from "../core/dom.js";
 
 function renderSelectOptions(items, selectedValue = "") {
@@ -311,9 +312,7 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     freshPanels.clear();
     const panels = ["issues", ...["report", "candidates", "reviewed"].filter(isPanelOpen)];
     panels.forEach((name) => freshPanels.add(name));
-    const session = await fetch("/api/admin/session")
-      .then((response) => (response.ok ? response.json() : {}))
-      .catch(() => ({}));
+    const session = await fetchAdminSession();
     isAdmin = Boolean(session.authenticated);
     const ignore = () => {};
     await Promise.all([
@@ -363,5 +362,12 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     }
   }
 
-  return { loadDataQuality, loadIssues: () => loadPanel("issues") };
+  function bindEvents() {
+    $("#quality-filter-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      loadPanel("issues");
+    });
+  }
+
+  return { bindEvents, loadDataQuality };
 }

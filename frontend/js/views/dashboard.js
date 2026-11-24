@@ -1,3 +1,5 @@
+// Dashboard: record counts, follow-up lists and duplicate registrations.
+import { getJson } from "../api.js";
 import { $, escapeHtml } from "../core/dom.js";
 import { state } from "../core/state.js";
 
@@ -66,7 +68,7 @@ export function createDashboardController({ navigate, bindRecordLinks, loadRecor
 
   async function loadFilterSources() {
     if (state.dashboardSources.length) return;
-    const catalog = await (await fetch("/api/catalog")).json();
+    const catalog = await getJson("/api/catalog");
     state.dashboardSources = catalog.sources;
     const sourceSelect = $("#dashboard-source-filter");
     const selectedSource = sourceSelect.value;
@@ -93,9 +95,7 @@ export function createDashboardController({ navigate, bindRecordLinks, loadRecor
     if (!sheets) {
       const source = state.dashboardSources.find((item) => String(item.id) === sourceId);
       const configuredSheets = (source?.configured_sheets || []).map((item) => item.name);
-      const sourceDashboard = await (
-        await fetch(`/api/dashboard?source_id=${encodeURIComponent(sourceId)}`)
-      ).json();
+      const sourceDashboard = await getJson(`/api/dashboard?source_id=${encodeURIComponent(sourceId)}`);
       sheets = [...new Set([
         ...configuredSheets,
         ...sourceDashboard.by_source_sheet.map((item) => item.label),
@@ -174,7 +174,7 @@ export function createDashboardController({ navigate, bindRecordLinks, loadRecor
     $("#duplicate-groups").innerHTML = `<p class="muted">กำลังค้นหารายการที่ซ้ำ…</p>`;
     const params = filterParams();
     params.set("limit", "50");
-    const duplicates = await (await fetch(`/api/duplicates?${params}`)).json();
+    const duplicates = await getJson(`/api/duplicates?${params}`);
     const caption = duplicates.total_groups > duplicates.groups.length
       ? `<p class="muted">แสดง ${duplicates.groups.length.toLocaleString()} จาก ${duplicates.total_groups.toLocaleString()} กลุ่ม</p>`
       : "";
@@ -201,7 +201,7 @@ export function createDashboardController({ navigate, bindRecordLinks, loadRecor
     await loadFilterSources();
     const params = filterParams();
     const endpoint = params.size ? `/api/dashboard?${params}` : "/api/dashboard";
-    const data = await (await fetch(endpoint)).json();
+    const data = await getJson(endpoint);
     const metrics = [
       ["ระเบียนทั้งหมด", data.total_records, "ข้อมูลที่นำเข้าในระบบกลาง"],
       ["มีเลขทะเบียน", data.with_registration_no, `${percentOf(data.with_registration_no, data.total_records)} ของทั้งหมด`],

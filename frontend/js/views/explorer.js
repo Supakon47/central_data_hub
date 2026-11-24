@@ -1,3 +1,5 @@
+// Data Explorer: search, filter and page through records as cards or a table.
+import { getJson } from "../api.js";
 import { $, badge, compact, escapeHtml } from "../core/dom.js";
 import { state } from "../core/state.js";
 
@@ -76,9 +78,29 @@ export function createExplorerController({ navigate }) {
     return params;
   }
 
+  // Fill a filter <select>, keeping its first "all" option. `valueKey` picks the option value.
+  function setOptions(target, items, valueKey = "label") {
+    const select = $(target);
+    const placeholder = select.options[0].outerHTML;
+    select.innerHTML = `${placeholder}${items
+      .map((item) => `<option value="${escapeHtml(item[valueKey])}">${escapeHtml(item.label)} (${item.count.toLocaleString()})</option>`)
+      .join("")}`;
+  }
+
+  async function loadFilterOptions() {
+    const [data, filterData] = await Promise.all([getJson("/api/dashboard"), getJson("/api/filter-options")]);
+    setOptions("#sheet-filter", data.by_source_sheet);
+    setOptions("#year-filter", filterData.registration_years);
+    setOptions("#check-filter", data.by_data_check);
+    setOptions("#photo-filter", data.by_photo);
+    setOptions("#antique-filter", data.by_antique);
+    setOptions("#storage-filter", data.by_storage);
+    setOptions("#material-filter", filterData.material_groups, "value");
+    setOptions("#period-filter", filterData.period_groups, "value");
+  }
+
   async function loadRecords() {
-    const response = await fetch(`/api/records?${filters()}`);
-    const data = await response.json();
+    const data = await getJson(`/api/records?${filters()}`);
     state.total = data.total;
     state.lastItems = data.items;
     $("#result-summary").textContent =
@@ -150,5 +172,5 @@ export function createExplorerController({ navigate }) {
     });
   }
 
-  return { bindEvents, bindRecordLinks, clearDashboardContext, loadRecords };
+  return { bindEvents, bindRecordLinks, clearDashboardContext, loadFilterOptions, loadRecords };
 }
