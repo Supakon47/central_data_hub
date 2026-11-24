@@ -1,0 +1,22 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    # Starlette's test client still uses httpx; nothing to change on our side.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, import order, pyupgrade, bugbear, simplify
+select = ["F", "E", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "B008",    # FastAPI declares parameters with function calls such as Query(...)
+    "SIM108",  # an if/else block is often clearer than a long conditional expression
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]

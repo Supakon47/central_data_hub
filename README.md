@@ -212,20 +212,46 @@ docker compose up -d --force-recreate
 central-data-hub/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py             # FastAPI routes
+│   │   ├── main.py             # Creates the app: routers, static files, background sync
+│   │   ├── routers/            # HTTP routes, one module per area (records, dashboard,
+│   │   │                       #   quality, locations, admin_auth, admin_sources, admin_records)
+│   │   ├── services/           # Shared logic: filters, location matching, cache, audit, Google guards
+│   │   ├── schemas.py          # Request bodies
+│   │   ├── dependencies.py     # Database session and administrator check
 │   │   ├── models.py           # Database schema
+│   │   ├── normalization.py    # Data and image URL normalization
 │   │   ├── import_workbook.py  # Excel import command
 │   │   ├── configure_google_sheet.py # Register an approved Google Sheets tab
-│   │   ├── sync_google_sheet.py      # Read-only Google Sheets sync command
-│   │   └── normalization.py    # Data and image URL normalization
+│   │   └── sync_google_sheet.py      # Read-only Google Sheets sync command
+│   ├── tests/                  # pytest suite (uses a temporary SQLite database)
 │   ├── Dockerfile
-│   └── requirements.txt
+│   ├── pyproject.toml          # pytest and ruff settings
+│   ├── requirements.txt
+│   └── requirements-dev.txt    # + pytest, httpx, ruff
+├── scripts/
+│   └── api_snapshot.py         # Record/compare read-only API responses around a refactor
 ├── frontend/
 │   ├── templates/             # Jinja page shell, partials, and sections
 │   ├── js/                    # Browser modules: core, views, and main entry
 │   └── styles.css
 ├── docker-compose.yml
 └── .env.example
+```
+
+## ทดสอบโค้ด
+
+ชุดทดสอบใช้ฐานข้อมูล SQLite ชั่วคราว จึงไม่แตะข้อมูลจริงใน PostgreSQL รันใน container เดียวกับระบบได้เลย
+
+```powershell
+$backend = (Resolve-Path backend).Path
+docker compose run --rm --no-deps -v "${backend}:/app/backend" -w /app/backend web sh -c "pip install -q -r requirements-dev.txt && ruff check app tests && python -m pytest"
+```
+
+ก่อนปรับโครงสร้างโค้ดครั้งใหญ่ ให้บันทึกผลของ API แบบอ่านอย่างเดียวไว้ แล้วเทียบอีกครั้งหลังแก้ (ต้องเปิดระบบไว้ที่ `localhost:8000` และข้อมูลต้องเหมือนเดิม)
+
+```powershell
+python scripts\api_snapshot.py record $env:TEMP\api-before
+python scripts\api_snapshot.py compare $env:TEMP\api-before
 ```
 
 ## การจัดการข้อมูลและข้อจำกัด

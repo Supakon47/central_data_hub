@@ -7,3 +7,5 @@ data/
 *.db
 *.sqlite3
 imports/
+.pytest_cache/
+.ruff_cache/
