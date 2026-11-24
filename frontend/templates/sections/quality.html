@@ -19,6 +19,24 @@
       <tbody id="quality-body"></tbody>
     </table>
   </div>
+  <section class="location-match-review" aria-labelledby="location-report-heading">
+    <div class="section-heading compact-heading">
+      <div>
+        <h3 id="location-report-heading">รายงานผลการจับคู่ทะเบียนกับตำแหน่ง</h3>
+        <p>นับแถวจากแหล่งข้อมูลตำแหน่งว่าเลขทะเบียนตรงกับทะเบียนวัตถุได้กี่รายการ เป็นตัวเลขเพื่อประเมิน pilot ไม่ใช่ผลยืนยันว่าเป็นวัตถุชิ้นเดียวกัน</p>
+      </div>
+    </div>
+    <p id="location-report-summary" class="muted"></p>
+    <div class="table-wrap">
+      <table class="quality-table location-report-table">
+        <thead><tr>
+          <th>แหล่งข้อมูลตำแหน่ง</th><th>แถว</th><th>ใช้จับคู่ได้</th><th>เลขว่าง / ชั่วคราว</th>
+          <th>พบในทะเบียน</th><th>ไม่พบในทะเบียน</th><th>เลขซ้ำในแหล่ง</th><th>ชื่อไม่ตรงกัน</th><th>ผลตรวจ</th>
+        </tr></thead>
+        <tbody id="location-report-body"></tbody>
+      </table>
+    </div>
+  </section>
   <section class="location-match-review" aria-labelledby="location-match-heading">
     <div class="section-heading compact-heading">
       <div>
@@ -31,6 +49,21 @@
       <table class="quality-table location-match-table">
         <thead><tr><th>เลขทะเบียน</th><th>ข้อมูลวัตถุ</th><th>ตำแหน่งที่เสนอ</th><th>ข้อควรตรวจ</th><th>การตัดสินใจ</th></tr></thead>
         <tbody id="location-match-body"></tbody>
+      </table>
+    </div>
+  </section>
+  <section class="location-match-review" aria-labelledby="location-reviewed-heading">
+    <div class="section-heading compact-heading">
+      <div>
+        <h3 id="location-reviewed-heading">ผลตรวจที่บันทึกแล้ว</h3>
+        <p>ยกเลิกผลตรวจได้ถ้าบันทึกผิด คู่นั้นจะกลับไปอยู่ในรายการรอตรวจ และระบบเก็บประวัติการยกเลิกไว้</p>
+      </div>
+    </div>
+    <p id="location-reviewed-summary" class="muted"></p>
+    <div class="table-wrap">
+      <table class="quality-table location-match-table">
+        <thead><tr><th>เลขทะเบียน</th><th>ข้อมูลวัตถุ</th><th>ตำแหน่ง</th><th>ผลตรวจ</th><th>จัดการ</th></tr></thead>
+        <tbody id="location-reviewed-body"></tbody>
       </table>
     </div>
   </section>

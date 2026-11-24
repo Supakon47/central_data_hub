@@ -38,6 +38,44 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     </tr>`;
   }
 
+  function renderReportRow(source, startYear) {
+    const n = (value) => Number(value || 0).toLocaleString();
+    const percent = (part, whole) => (whole ? ` (${Math.round((part / whole) * 100)}%)` : "");
+    const years = source.unmatched_by_year;
+    return `<tr>
+      <td><strong>${escapeHtml(source.source_name || `แหล่ง #${source.source_id}`)}</strong></td>
+      <td>${n(source.rows)}${source.missing_location ? `<br><span class="muted">ไม่มีตำแหน่ง ${n(source.missing_location)}</span>` : ""}</td>
+      <td>${n(source.with_key)}</td>
+      <td>${n(source.missing_registration + source.placeholder_registration)}
+        <br><span class="muted">ว่าง ${n(source.missing_registration)} · ชั่วคราว ${n(source.placeholder_registration)}</span></td>
+      <td><strong>${n(source.matched)}</strong>${percent(source.matched, source.with_key)}</td>
+      <td>${n(source.unmatched)}
+        <br><span class="muted">ก่อนปี ${startYear} ${n(years.before_register)} · ตั้งแต่ ${startYear} ${n(years.since_register)} · ไม่มีปี ${n(years.no_year)}</span></td>
+      <td>${n(source.duplicate_keys)} เลข<br><span class="muted">${n(source.duplicate_rows)} แถว</span></td>
+      <td>${n(source.title_conflict_pairs)} / ${n(source.pairs)} คู่</td>
+      <td>อนุมัติ ${n(source.approved)}<br>ไม่ใช่ ${n(source.rejected)}<br>รอตรวจ ${n(source.pending)}</td>
+    </tr>`;
+  }
+
+  function renderReviewedMatch(review, isAdmin) {
+    const decision = review.decision === "approved"
+      ? `<span class="badge">อนุมัติแล้ว</span>`
+      : `<span class="quality-severity warning">ไม่ใช่รายการเดียวกัน</span>`;
+    const reviewedAt = review.reviewed_at
+      ? `<br><span class="muted">${new Date(review.reviewed_at).toLocaleString("th-TH")}</span>`
+      : "";
+    const action = isAdmin
+      ? `<button class="small secondary" data-location-review-undo="${review.id}">ยกเลิกผลตรวจ</button>`
+      : `<span class="muted">เข้าสู่ระบบผู้ดูแลเพื่อแก้ไข</span>`;
+    return `<tr>
+      <td><strong>${escapeHtml(review.object_record.registration_no || "")}</strong></td>
+      <td>${renderLocationRecord(review.object_record)}</td>
+      <td>${renderLocationRecord(review.location_record, review.location_record.location)}</td>
+      <td>${decision}${reviewedAt}${review.note ? `<br><small>${escapeHtml(review.note)}</small>` : ""}</td>
+      <td>${action}</td>
+    </tr>`;
+  }
+
   function renderQualityIssue(issue, isAdmin) {
     const location = `${escapeHtml(issue.source_name)}<br>
       <span class="muted">${escapeHtml(issue.source_sheet || "-")}${issue.source_row_number ? ` / แถว ${issue.source_row_number}` : ""}</span>`;
@@ -65,6 +103,10 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
   function bindQualityActions() {
     bindRecordLinks("#quality-body [data-record-id]");
     bindRecordLinks("#location-match-body [data-record-id]");
+    bindRecordLinks("#location-reviewed-body [data-record-id]");
+    document.querySelectorAll("[data-location-review-undo]").forEach((button) => {
+      button.addEventListener("click", () => undoLocationReview(button.dataset.locationReviewUndo));
+    });
     document.querySelectorAll("[data-quality-resolve]").forEach((button) => {
       button.addEventListener("click", () => {
         updateQualityIssue(button.dataset.qualityResolve, true);
@@ -99,11 +141,13 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     if ($("#quality-include-resolved").checked) {
       params.set("include_resolved", "true");
     }
-    const [issuesResponse, catalogResponse, sessionResponse, locationResponse] = await Promise.all([
+    const [issuesResponse, catalogResponse, sessionResponse, locationResponse, reportResponse, reviewedResponse] = await Promise.all([
       fetch(`/api/data-quality/issues?${params}`),
       fetch("/api/catalog"),
       fetch("/api/admin/session"),
       fetch("/api/location-match-candidates?limit=100"),
+      fetch("/api/location-match-report"),
+      fetch("/api/location-match-reviews"),
     ]);
     if (!issuesResponse.ok) {
       throw new Error("ไม่สามารถโหลดประเด็นคุณภาพข้อมูลได้");
@@ -142,6 +186,28 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     $("#location-match-body").innerHTML = locationMatches.items
       .map((candidate) => renderLocationMatch(candidate, adminSession.authenticated))
       .join("") || `<tr><td colspan="5" class="muted">ยังไม่มีคู่ข้อมูลที่พร้อมให้ตรวจ โปรดนำเข้าทั้งทะเบียนหลักและข้อมูลตำแหน่งก่อน</td></tr>`;
+
+    if (reportResponse.ok) {
+      const report = await reportResponse.json();
+      const objects = report.object_records;
+      $("#location-report-summary").textContent =
+        `ทะเบียนวัตถุ ${objects.rows.toLocaleString()} แถว (${objects.distinct_keys.toLocaleString()} เลข) · `
+        + `มีตำแหน่งเสนอให้ ${objects.keys_with_location.toLocaleString()} เลข · ${report.message}`;
+      $("#location-report-body").innerHTML = report.location_sources
+        .map((source) => renderReportRow(source, report.register_start_year))
+        .join("") || `<tr><td colspan="9" class="muted">ยังไม่มีแหล่งข้อมูลที่มีคอลัมน์ตำแหน่ง</td></tr>`;
+    } else {
+      $("#location-report-summary").textContent = "ไม่สามารถโหลดรายงานผลการจับคู่ได้";
+      $("#location-report-body").innerHTML = "";
+    }
+
+    const reviewed = reviewedResponse.ok ? await reviewedResponse.json() : { total: 0, items: [] };
+    $("#location-reviewed-summary").textContent = reviewed.total
+      ? `บันทึกผลตรวจแล้ว ${reviewed.total.toLocaleString()} คู่`
+      : "ยังไม่มีผลตรวจที่บันทึก";
+    $("#location-reviewed-body").innerHTML = reviewed.items
+      .map((review) => renderReviewedMatch(review, adminSession.authenticated))
+      .join("") || `<tr><td colspan="5" class="muted">ยังไม่มีผลตรวจ</td></tr>`;
     bindQualityActions();
   }
 
@@ -170,6 +236,16 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
         }),
       });
       await Promise.all([loadDataQuality(), loadCatalog(), loadAudit()]);
+    } catch (error) {
+      window.alert(error.message);
+    }
+  }
+
+  async function undoLocationReview(reviewId) {
+    if (!window.confirm("ยกเลิกผลตรวจของคู่นี้ใช่หรือไม่? คู่นี้จะกลับไปอยู่ในรายการรอตรวจ")) return;
+    try {
+      await adminFetch(`/api/admin/location-match-reviews/${reviewId}`, { method: "DELETE" });
+      await Promise.all([loadDataQuality(), loadAudit()]);
     } catch (error) {
       window.alert(error.message);
     }

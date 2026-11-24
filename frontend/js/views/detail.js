@@ -1,3 +1,4 @@
+import { adminFetch } from "../api.js";
 import { $, compact, escapeHtml } from "../core/dom.js";
 import { state } from "../core/state.js";
 
@@ -23,7 +24,7 @@ function renderDuplicateCandidates(candidates) {
   </li>`).join("")}</ul>`;
 }
 
-function renderLinkedLocations(locations) {
+function renderLinkedLocations(locations, isAdmin) {
   if (!locations?.length) {
     return `<p class="muted">ยังไม่มีตำแหน่งที่เจ้าหน้าที่อนุมัติการเชื่อม</p>`;
   }
@@ -33,6 +34,7 @@ function renderLinkedLocations(locations) {
       <strong>${escapeHtml(item.location?.value || "ไม่ระบุตำแหน่ง")}</strong>
       <span>${escapeHtml(`${source.source_name || ""} / ${source.source_sheet || ""} / แถว ${source.source_row_number || "-"}`)}</span>
       ${item.note ? `<small>${escapeHtml(item.note)}</small>` : ""}
+      ${isAdmin && item.review_id ? `<button class="small secondary" type="button" data-detail-review-undo="${item.review_id}">ยกเลิกการเชื่อม</button>` : ""}
     </li>`;
   }).join("")}</ul>`;
 }
@@ -122,7 +124,10 @@ function renderSourceDetails(rawRows) {
 export function createDetailController({ bindRecordLinks, pushRoute, setView }) {
   async function loadDetail(recordId, updateHistory = true) {
     if (updateHistory) pushRoute("detail", recordId);
-    const record = await (await fetch(`/api/records/${recordId}`)).json();
+    const [record, adminSession] = await Promise.all([
+      fetch(`/api/records/${recordId}`).then((response) => response.json()),
+      fetch("/api/admin/session").then((response) => (response.ok ? response.json() : {})).catch(() => ({})),
+    ]);
     state.currentDetailId = recordId;
     setView("detail");
     const fields = [
@@ -156,7 +161,7 @@ export function createDetailController({ bindRecordLinks, pushRoute, setView }) 
         <div class="detail-section">
           <h3>ตำแหน่งจัดเก็บที่ยืนยันแล้ว</h3>
           <p class="muted">แสดงเฉพาะความสัมพันธ์ที่ผู้ดูแลอนุมัติจากหลักฐานต้นทาง ไม่ใช่การแก้ไข Excel ต้นฉบับ</p>
-          ${renderLinkedLocations(record.linked_locations)}
+          ${renderLinkedLocations(record.linked_locations, adminSession.authenticated)}
         </div>
         <div class="detail-section">
           <h3>ระเบียนที่อาจซ้ำ</h3>
@@ -169,6 +174,17 @@ export function createDetailController({ bindRecordLinks, pushRoute, setView }) 
     document.querySelectorAll("[data-detail-record-id]").forEach((button) => {
       button.addEventListener("click", () => {
         if (button.dataset.detailRecordId) loadDetail(button.dataset.detailRecordId);
+      });
+    });
+    document.querySelectorAll("[data-detail-review-undo]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        if (!window.confirm("ยกเลิกการเชื่อมตำแหน่งนี้ใช่หรือไม่? คู่นี้จะกลับไปอยู่ในรายการรอตรวจ และไม่แก้ Excel ต้นทาง")) return;
+        try {
+          await adminFetch(`/api/admin/location-match-reviews/${button.dataset.detailReviewUndo}`, { method: "DELETE" });
+          await loadDetail(recordId, false);
+        } catch (error) {
+          window.alert(error.message);
+        }
       });
     });
     document.querySelectorAll(".detail-thumbnail").forEach((button) => {

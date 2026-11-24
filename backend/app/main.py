@@ -405,7 +405,11 @@ def record_location(record: Record) -> dict | None:
     onto the object record. This preserves the source evidence and supports
     several observations for one registration number.
     """
-    for key, value in (record.raw_data or {}).items():
+    return location_from_raw(record.raw_data)
+
+
+def location_from_raw(raw_data: dict | None) -> dict | None:
+    for key, value in (raw_data or {}).items():
         if normalise_header(key) not in LOCATION_FIELD_ALIASES:
             continue
         location = clean_multiline_text(value)
@@ -414,10 +418,23 @@ def record_location(record: Record) -> dict | None:
     return None
 
 
+def storage_source_ids(session: Session) -> set[int]:
+    """Sources that supply storage locations: any source with a located row."""
+    ids: set[int] = set()
+    for source_id, raw_data in session.execute(select(Record.source_id, Record.raw_data)):
+        if source_id not in ids and location_from_raw(raw_data):
+            ids.add(source_id)
+    return ids
+
+
 def title_conflict(object_record: Record, location_record: Record) -> bool:
     """Flag clearly different titles as a review aid, never as a rejection."""
-    object_title = clean_text(object_record.title_description)
-    location_title = clean_text(location_record.title_description)
+    return titles_conflict(object_record.title_description, location_record.title_description)
+
+
+def titles_conflict(object_title: str | None, location_title: str | None) -> bool:
+    object_title = clean_text(object_title)
+    location_title = clean_text(location_title)
     if not object_title or not location_title:
         return False
     left = re.sub(r"\s+", "", unicodedata.normalize("NFKC", object_title)).casefold()
@@ -756,6 +773,7 @@ def list_location_match_candidates(
     if source_id:
         statement = statement.where(Record.source_id == source_id)
     records = session.scalars(statement).all()
+    storage_sources = storage_source_ids(session)
     groups: dict[str, list[Record]] = {}
     for candidate in records:
         key = normalise_registration_no(candidate.registration_no)
@@ -768,8 +786,12 @@ def list_location_match_candidates(
     }
     items = []
     for registration_no, candidates in sorted(groups.items()):
-        location_records = [candidate for candidate in candidates if record_location(candidate)]
-        object_records = [candidate for candidate in candidates if not record_location(candidate)]
+        location_records = [
+            candidate for candidate in candidates
+            if candidate.source_id in storage_sources and record_location(candidate)
+        ]
+        # A storage-list row with a blank shelf is still a storage row, never an object row.
+        object_records = [candidate for candidate in candidates if candidate.source_id not in storage_sources]
         for object_record in object_records:
             for location_record in location_records:
                 review = reviewed_pairs.get((object_record.id, location_record.id))
@@ -790,6 +812,126 @@ def list_location_match_candidates(
         "items": items[:limit],
         "message": "รายการนี้เป็นเพียงข้อเสนอการจับคู่ ยังไม่เปลี่ยนข้อมูลตำแหน่งของวัตถุ",
     }
+
+
+REGISTRATION_YEAR = re.compile(r"(?<!\d)(2[45]\d\d)(?!\d)")
+REGISTER_START_YEAR = 2564
+
+
+def registration_year_bucket(registration_no: str | None) -> str:
+    """Group a registration by the Buddhist-era year it carries, if any."""
+    years = REGISTRATION_YEAR.findall(registration_no or "")
+    if not years:
+        return "no_year"
+    return "since_register" if int(years[-1]) >= REGISTER_START_YEAR else "before_register"
+
+
+@app.get("/api/location-match-report")
+def location_match_report(session: Annotated[Session, Depends(get_session)]) -> dict:
+    """Summarise how storage-location rows match object rows; read-only.
+
+    A storage row counts as "matched" when its normalised registration number
+    also appears on at least one object row (a row without a location). It is a
+    measure of what *could* be linked, not of what staff have approved.
+    """
+    source_names = dict(session.execute(select(DataSource.id, DataSource.name)).all())
+    rows = session.execute(select(
+        Record.id, Record.source_id, Record.registration_no, Record.title_description, Record.raw_data,
+    )).all()
+
+    storage_sources = {row.source_id for row in rows if location_from_raw(row.raw_data)}
+    object_keys: dict[str, list] = {}
+    location_rows = []
+    object_total = 0
+    for row in rows:
+        key = normalise_registration_no(row.registration_no)
+        if row.source_id in storage_sources:
+            location_rows.append((row, key))
+        else:
+            object_total += 1
+            if key:
+                object_keys.setdefault(key, []).append(row)
+
+    reviews = session.execute(select(
+        LocationMatchReview.object_record_id, LocationMatchReview.location_record_id, LocationMatchReview.decision,
+    )).all()
+    decisions = {(review.object_record_id, review.location_record_id): review.decision for review in reviews}
+
+    sources: dict[int, dict] = {}
+    keys_by_source: dict[int, Counter] = {}
+    matched_object_keys: set[str] = set()
+    for row, key in location_rows:
+        summary = sources.setdefault(row.source_id, {
+            "source_id": row.source_id,
+            "source_name": source_names.get(row.source_id),
+            "rows": 0, "missing_location": 0,
+            "missing_registration": 0, "placeholder_registration": 0, "with_key": 0,
+            "matched": 0, "unmatched": 0,
+            "unmatched_by_year": {"before_register": 0, "since_register": 0, "no_year": 0},
+            "duplicate_keys": 0, "duplicate_rows": 0,
+            "pairs": 0, "title_conflict_pairs": 0, "approved": 0, "rejected": 0, "pending": 0,
+        })
+        summary["rows"] += 1
+        if not location_from_raw(row.raw_data):
+            summary["missing_location"] += 1
+        if not clean_text(row.registration_no):
+            summary["missing_registration"] += 1
+            continue
+        if not key:
+            summary["placeholder_registration"] += 1
+            continue
+        summary["with_key"] += 1
+        keys_by_source.setdefault(row.source_id, Counter())[key] += 1
+        objects = object_keys.get(key)
+        if not objects:
+            summary["unmatched"] += 1
+            summary["unmatched_by_year"][registration_year_bucket(key)] += 1
+            continue
+        summary["matched"] += 1
+        if not location_from_raw(row.raw_data):
+            # Registered object, but this row has no shelf to propose.
+            continue
+        matched_object_keys.add(key)
+        for object_row in objects:
+            summary["pairs"] += 1
+            if titles_conflict(object_row.title_description, row.title_description):
+                summary["title_conflict_pairs"] += 1
+            summary[decisions.get((object_row.id, row.id), "pending")] += 1
+
+    for source_id, counter in keys_by_source.items():
+        duplicates = [count for count in counter.values() if count > 1]
+        sources[source_id]["duplicate_keys"] = len(duplicates)
+        sources[source_id]["duplicate_rows"] = sum(duplicates)
+
+    return {
+        "register_start_year": REGISTER_START_YEAR,
+        "object_records": {
+            "rows": object_total,
+            "distinct_keys": len(object_keys),
+            "keys_with_location": len(matched_object_keys),
+        },
+        "location_sources": sorted(sources.values(), key=lambda item: item["source_name"] or ""),
+        "message": "รายงานนี้นับจากเลขทะเบียนที่ตรงกันเท่านั้น ไม่ใช่ผลยืนยันว่าเป็นวัตถุชิ้นเดียวกัน",
+    }
+
+
+@app.get("/api/location-match-reviews")
+def list_location_match_reviews(
+    session: Annotated[Session, Depends(get_session)],
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict:
+    """Staff decisions already recorded, newest first."""
+    reviews = session.scalars(
+        select(LocationMatchReview).order_by(LocationMatchReview.reviewed_at.desc()).limit(limit)
+    ).all()
+    items = []
+    for review in reviews:
+        object_record = session.get(Record, review.object_record_id)
+        location_record = session.get(Record, review.location_record_id)
+        if object_record and location_record:
+            items.append(location_review_summary(review, object_record, location_record))
+    total = session.scalar(select(func.count()).select_from(LocationMatchReview)) or 0
+    return {"total": total, "items": items}
 
 
 @app.get("/api/dashboard")
@@ -1089,6 +1231,33 @@ def review_location_match(
     )
     session.commit()
     return location_review_summary(review, object_record, location_record)
+
+
+@app.delete("/api/admin/location-match-reviews/{review_id}")
+def undo_location_match_review(
+    review_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    _: Annotated[None, Depends(require_admin)],
+) -> dict:
+    """Withdraw a recorded decision so the pair returns to the review queue.
+
+    Only the review row is removed; both source records stay untouched and the
+    withdrawn decision is kept in the audit log.
+    """
+    review = session.get(LocationMatchReview, review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="ไม่พบผลตรวจการเชื่อมตำแหน่งนี้")
+    before = {
+        "decision": review.decision,
+        "note": review.note,
+        "object_record_id": review.object_record_id,
+        "location_record_id": review.location_record_id,
+        "reviewed_at": review.reviewed_at.isoformat() if review.reviewed_at else None,
+    }
+    session.delete(review)
+    add_audit(session, "undo_location_match", review_id, before, None, entity_type="location_match_review")
+    session.commit()
+    return {"id": review_id, "message": "ยกเลิกผลตรวจแล้ว คู่นี้กลับไปอยู่ในรายการรอตรวจ"}
 
 
 @app.get("/api/admin/session")

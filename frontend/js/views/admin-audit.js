@@ -4,6 +4,7 @@ import { $, escapeHtml } from "../core/dom.js";
 function entityLabel(type) {
   if (type === "data_source") return "แหล่งข้อมูล";
   if (type === "data_quality_issue") return "ประเด็นคุณภาพข้อมูล";
+  if (type === "location_match_review") return "ผลตรวจการเชื่อมตำแหน่ง";
   return "ระเบียน";
 }
 
