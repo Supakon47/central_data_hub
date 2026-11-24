@@ -1,22 +1,21 @@
 """Read-only XLSX importer for the local pilot dataset."""
 
 import argparse
-from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import Path
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
+from datetime import UTC, datetime
+from pathlib import Path
 
 import openpyxl
 from sqlalchemy import select
 
-from .database import Base, SessionLocal, engine
 from .config import IMAGE_STORAGE_DIR
+from .database import Base, SessionLocal, engine
 from .embedded_images import extract_embedded_images
 from .models import DataQualityIssue, DataSource, Record, SyncRun
 from .normalization import clean_multiline_text, clean_text, normalise_header, normalise_image_url
-
 
 FIELD_ALIASES = {
     "registration_no": ("เลขทะเบียน", "ทะเบียน", "เลขวัตถุ", "เลขประจำวัตถุ", "."),
@@ -284,7 +283,7 @@ def sync_tabular_sheets(
                 removed_count += 1
 
     run.status = "completed"
-    run.completed_at = datetime.now(timezone.utc)
+    run.completed_at = datetime.now(UTC)
     run.message = (
         f"{run_message}; removed stale records: {removed_count}"
         if reconcile_missing else run_message

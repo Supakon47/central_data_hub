@@ -4,17 +4,16 @@ The web application never accepts a spreadsheet ID or service-account
 credential from a request. Both are configured by an administrator first.
 """
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 
 from .config import (
     GOOGLE_SERVICE_ACCOUNT_FILE,
     GOOGLE_SERVICE_ACCOUNT_JSON,
     GOOGLE_SHEETS_ENABLED,
 )
-
 
 READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"

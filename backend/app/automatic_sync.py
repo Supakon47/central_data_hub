@@ -9,9 +9,9 @@ dedicated worker or platform scheduler.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
 import logging
 import threading
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -19,7 +19,6 @@ from .database import Base, SessionLocal, engine
 from .models import DataSource, SyncRun
 from .sync_google_image_bridge import sync_google_image_bridge
 from .sync_google_sheet import sync_google_source
-
 
 LOGGER = logging.getLogger(__name__)
 _RUN_LOCK = threading.Lock()
@@ -42,7 +41,7 @@ def _is_due(last_attempt: datetime | None, interval_minutes: int, now: datetime)
     if last_attempt is None:
         return True
     if last_attempt.tzinfo is None:
-        last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+        last_attempt = last_attempt.replace(tzinfo=UTC)
     return now >= last_attempt + timedelta(minutes=interval_minutes)
 
 
@@ -55,7 +54,7 @@ def _record_failure(source_id: int, error: Exception) -> None:
             SyncRun(
                 source_id=source_id,
                 status="failed",
-                completed_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(UTC),
                 error_count=1,
                 message=f"Automatic sync failed: {message[:MAX_ERROR_MESSAGE_LENGTH]}",
             )
@@ -88,7 +87,7 @@ def _record_bridge_failure(source_id: int, error: Exception) -> None:
 
 def _due_sources() -> list[tuple[int, str, bool]]:
     """Find eligible sources without keeping a database session during I/O."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     session = SessionLocal()
     try:
         sources = session.scalars(

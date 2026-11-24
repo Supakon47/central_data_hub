@@ -1,14 +1,13 @@
 """Extract embedded XLSX images by their worksheet anchor without altering the workbook."""
 
+import xml.etree.ElementTree as ElementTree
+import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
 from posixpath import dirname, join, normpath
 from urllib.parse import quote
-import xml.etree.ElementTree as ElementTree
-import zipfile
-
 
 NS = {
     "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",

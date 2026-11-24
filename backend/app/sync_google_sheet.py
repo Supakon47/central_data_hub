@@ -1,17 +1,17 @@
 """Synchronise pre-approved Google Sheets tabs into the central database."""
 
 import argparse
-from dataclasses import replace
 import json
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sqlalchemy import select
 
-from .database import Base, SessionLocal, engine
 from .config import IMAGE_STORAGE_DIR
+from .database import Base, SessionLocal, engine
 from .embedded_images import extract_embedded_images
-from .google_sheets import GoogleSheetSource, GoogleSheetsConfigurationError, export_workbook_as_xlsx, fetch_values
+from .google_sheets import GoogleSheetsConfigurationError, GoogleSheetSource, export_workbook_as_xlsx, fetch_values
 from .import_workbook import FIELD_ALIASES, STABLE_ROW_ID_ALIASES, TabularSheet, sync_tabular_sheets
 from .models import DataSource, SourceSheetConfig
 from .normalization import clean_text, image_url_from_google_sheets_formula, normalise_header

@@ -2,22 +2,22 @@
 
 import argparse
 import json
+import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import zipfile
 
 from sqlalchemy import select
 
 from .database import SessionLocal
 from .embedded_images import extract_embedded_images
 from .google_sheets import (
-    GoogleSheetSource,
     GoogleSheetsConfigurationError,
+    GoogleSheetSource,
     export_workbook_as_xlsx,
     fetch_values,
     google_drive_file_capabilities,
 )
-from .import_workbook import FIELD_ALIASES, TabularSheet
+from .import_workbook import FIELD_ALIASES
 from .models import DataSource, SourceSheetConfig
 from .normalization import normalise_header
 
@@ -108,10 +108,10 @@ if __name__ == "__main__":
         print(json.dumps(inspect_google_sheet_images(args.source_name), ensure_ascii=False, indent=2))
     except (GoogleSheetsConfigurationError, ValueError) as error:
         print(json.dumps({"ok": False, "message": str(error)}, ensure_ascii=False, indent=2))
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     except Exception as error:
         print(json.dumps({
             "ok": False,
             "message": f"ตรวจไฟล์ export ไม่สำเร็จ ({type(error).__name__}): {str(error)[:300]}",
         }, ensure_ascii=False, indent=2))
-        raise SystemExit(1)
+        raise SystemExit(1) from None

@@ -16,12 +16,10 @@ import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import openpyxl
 
 from .normalization import clean_text, normalise_header, normalise_registration_no
-
 
 REGISTRATION_HEADERS = {
     "เลขทะเบียน",

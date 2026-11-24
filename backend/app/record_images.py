@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import uuid
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import IMAGE_STORAGE_DIR
 from .models import Record, RecordImage
-
 
 IMAGE_SIGNATURES = (
     (b"\xff\xd8\xff", ".jpg"),
@@ -25,9 +24,9 @@ IMAGE_SIGNATURES = (
 def uploaded_image_suffix(content: bytes) -> str | None:
     """Return a browser-safe suffix after checking the file signature."""
     for signature, suffix in IMAGE_SIGNATURES:
-        if content.startswith(signature):
-            if suffix != ".webp" or content[8:12] == b"WEBP":
-                return suffix
+        # WebP shares the RIFF signature with other formats; check its own marker too.
+        if content.startswith(signature) and (suffix != ".webp" or content[8:12] == b"WEBP"):
+            return suffix
     return None
 
 

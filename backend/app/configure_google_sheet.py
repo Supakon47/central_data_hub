@@ -25,7 +25,7 @@ def configure_google_sheet(
     if not source_name.strip() or not spreadsheet_id.strip() or not sheet_name.strip():
         raise ValueError("ต้องระบุ source name, spreadsheet ID และชื่อชีต")
     spreadsheet_id = normalise_spreadsheet_id(spreadsheet_id)
-    GoogleSheetSource(spreadsheet_id, sheet_name, read_range).a1_range
+    _ = GoogleSheetSource(spreadsheet_id, sheet_name, read_range).a1_range  # raises on an invalid range
     if header_row_number != 1:
         raise ValueError("MVP ปัจจุบันรองรับหัวตารางที่แถวแรกของ range เท่านั้น (--header-row 1)")
 

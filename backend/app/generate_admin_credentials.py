@@ -5,7 +5,6 @@ import secrets
 
 from .admin_security import hash_password
 
-
 if __name__ == "__main__":
     password = getpass.getpass("ตั้งรหัสผ่านผู้ดูแล (อย่างน้อย 12 ตัวอักษร): ")
     confirmation = getpass.getpass("ยืนยันรหัสผ่าน: ")

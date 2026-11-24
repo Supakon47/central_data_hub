@@ -1,8 +1,6 @@
 import re
 import unicodedata
-from urllib.parse import urlparse
-from urllib.parse import parse_qs
-
+from urllib.parse import parse_qs, urlparse
 
 GOOGLE_SHEETS_IMAGE_FORMULA = re.compile(
     r'^\s*=\s*IMAGE\s*\(\s*"((?:[^"]|"")*)"', re.IGNORECASE

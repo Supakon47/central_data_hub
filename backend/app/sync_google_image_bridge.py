@@ -8,8 +8,8 @@ central copy beside the existing Data Hub media.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import unquote
@@ -29,7 +29,6 @@ from .import_workbook import FIELD_ALIASES
 from .models import DataSource, ImageBridgeConfig, Record, RecordImage
 from .normalization import clean_text, normalise_header
 from .record_images import store_record_image, uploaded_image_suffix
-
 
 MAX_BRIDGE_IMAGES = 2_000
 MAX_BRIDGE_IMAGE_BYTES = 25 * 1024 * 1024
@@ -353,7 +352,7 @@ def sync_google_image_bridge(source_name: str, dry_run: bool = False) -> dict:
             for image in session.scalars(stale_statement).all():
                 session.delete(image)
                 removed += 1
-            config.last_synced_at = datetime.now(timezone.utc)
+            config.last_synced_at = datetime.now(UTC)
             config.last_message = (
                 f"imported {matched}; changed {changed}; "
                 f"unmatched {len(unmatched)}; invalid {len(invalid)}"
