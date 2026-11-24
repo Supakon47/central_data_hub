@@ -1,0 +1,55 @@
+/* Data Catalog: source cards, sync status and Image Bridge settings. */
+.catalog-list {
+  display: grid;
+  gap: 14px;
+}
+.catalog-item {
+  padding: 18px;
+}
+.catalog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.catalog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+}
+.catalog-message {
+  min-height: 24px;
+  margin: 0 0 12px;
+  color: var(--brand);
+  font-weight: 700;
+}
+.catalog-message.error {
+  color: var(--danger);
+}
+.issue {
+  color: var(--warn);
+  font-weight: 700;
+}
+.image-bridge-config {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 13px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.image-bridge-config p {
+  margin: 0;
+  font-size: 13px;
+}
+.image-bridge-status {
+  color: var(--muted);
+}
+.image-bridge-config label {
+  max-width: 620px;
+}

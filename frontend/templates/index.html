@@ -4,7 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Central Data Hub</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20261123-1" />
+    <!-- Shared styles first, then one file per page; the order matters. -->
+    <link rel="stylesheet" href="/assets/css/base.css?v=20261124-1" />
+    <link rel="stylesheet" href="/assets/css/explorer.css?v=20261124-1" />
+    <link rel="stylesheet" href="/assets/css/dashboard.css?v=20261124-1" />
+    <link rel="stylesheet" href="/assets/css/catalog.css?v=20261124-1" />
+    <link rel="stylesheet" href="/assets/css/admin.css?v=20261124-1" />
+    <link rel="stylesheet" href="/assets/css/detail.css?v=20261124-1" />
+    <link rel="stylesheet" href="/assets/css/quality.css?v=20261124-1" />
   </head>
   <body>
     {% include "partials/header.html" %}

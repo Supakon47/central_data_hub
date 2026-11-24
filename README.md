@@ -233,7 +233,7 @@ central-data-hub/
 ├── frontend/
 │   ├── templates/             # Jinja page shell, partials, and sections
 │   ├── js/                    # Browser modules: core, views, and main entry
-│   └── styles.css
+│   └── css/                   # base.css plus one stylesheet per page
 ├── docker-compose.yml
 └── .env.example
 ```
