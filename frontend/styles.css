@@ -1296,6 +1296,22 @@ textarea {
   padding-top: 24px;
   border-top: 1px solid var(--line);
 }
+.quality-panel-count {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--badge-ink);
+  background: var(--brand-soft);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.quality-panel-count:empty {
+  display: none;
+}
+.quality-panel .quality-filters {
+  margin-top: 0;
+}
 .compact-heading {
   margin-bottom: 12px;
 }

@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import uuid
-from typing import Annotated
+from typing import Annotated, NamedTuple
 import unicodedata
 
 from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, not_, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .admin_security import admin_access_configured, create_session_token, valid_session_token, verify_password
 from .config import (
@@ -418,18 +418,72 @@ def location_from_raw(raw_data: dict | None) -> dict | None:
     return None
 
 
-def storage_source_ids(session: Session) -> set[int]:
-    """Sources that supply storage locations: any source with a located row."""
-    ids: set[int] = set()
-    for source_id, raw_data in session.execute(select(Record.source_id, Record.raw_data)):
-        if source_id not in ids and location_from_raw(raw_data):
-            ids.add(source_id)
-    return ids
+_RESULT_CACHE: dict[str, tuple[tuple, object]] = {}
 
 
-def title_conflict(object_record: Record, location_record: Record) -> bool:
-    """Flag clearly different titles as a review aid, never as a rejection."""
-    return titles_conflict(object_record.title_description, location_record.title_description)
+def records_version(session: Session) -> tuple:
+    """A cheap fingerprint that changes whenever records or sources change."""
+    records = session.execute(
+        select(func.count(Record.id), func.max(Record.id), func.max(Record.updated_at))
+    ).one()
+    sources = session.execute(select(func.count(DataSource.id), func.max(DataSource.updated_at))).one()
+    return (*records, *sources)
+
+
+def cached_for_records(session: Session, name: str, compute):
+    """Reuse a whole-table computation until any record or source changes.
+
+    Callers must treat the returned value as read-only, since it is shared.
+    """
+    version = records_version(session)
+    hit = _RESULT_CACHE.get(name)
+    if hit is not None and hit[0] == version:
+        return hit[1]
+    value = compute()
+    _RESULT_CACHE[name] = (version, value)
+    return value
+
+
+class LocationIndexRow(NamedTuple):
+    id: int
+    source_id: int
+    registration_no: str | None
+    title_description: str | None
+    location: dict | None
+    key: str | None
+
+
+class LocationIndex(NamedTuple):
+    rows: list[LocationIndexRow]
+    storage_sources: frozenset[int]
+    groups: dict[str, list[LocationIndexRow]]
+
+
+def location_index(session: Session) -> LocationIndex:
+    """Registration keys and storage locations for every record, cached.
+
+    Reading every raw_data payload is the slow part of location matching, so it
+    is done once per data version and shared by the review queue and the report.
+    """
+    def build() -> LocationIndex:
+        rows = [
+            LocationIndexRow(
+                row.id, row.source_id, row.registration_no, row.title_description,
+                location_from_raw(row.raw_data), normalise_registration_no(row.registration_no),
+            )
+            for row in session.execute(select(
+                Record.id, Record.source_id, Record.registration_no, Record.title_description, Record.raw_data,
+            ))
+        ]
+        # Any source with a located row is a storage list; all its rows are storage rows.
+        storage_sources = frozenset(row.source_id for row in rows if row.location)
+        groups: dict[str, list[LocationIndexRow]] = {}
+        for row in rows:
+            if row.key:
+                groups.setdefault(row.key, []).append(row)
+        return LocationIndex(rows, storage_sources, groups)
+
+    return cached_for_records(session, "location_index", build)
 
 
 def titles_conflict(object_title: str | None, location_title: str | None) -> bool:
@@ -682,6 +736,10 @@ def list_records(
 
 @app.get("/api/filter-options")
 def filter_options(session: Annotated[Session, Depends(get_session)]) -> dict:
+    return cached_for_records(session, "filter_options", lambda: compute_filter_options(session))
+
+
+def compute_filter_options(session: Session) -> dict:
     registration_year_counts = Counter()
     current_buddhist_year = datetime.now().year + 543
     registration_numbers = session.scalars(
@@ -769,47 +827,46 @@ def list_location_match_candidates(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict:
     """Find reviewable links; this endpoint never creates a relationship."""
-    statement = select(Record).where(Record.registration_no.is_not(None), Record.registration_no != "")
-    if source_id:
-        statement = statement.where(Record.source_id == source_id)
-    records = session.scalars(statement).all()
-    storage_sources = storage_source_ids(session)
-    groups: dict[str, list[Record]] = {}
-    for candidate in records:
-        key = normalise_registration_no(candidate.registration_no)
-        if key:
-            groups.setdefault(key, []).append(candidate)
-
-    reviewed_pairs = {
-        (review.object_record_id, review.location_record_id): review
-        for review in session.scalars(select(LocationMatchReview)).all()
-    }
-    items = []
-    for registration_no, candidates in sorted(groups.items()):
-        location_records = [
-            candidate for candidate in candidates
-            if candidate.source_id in storage_sources and record_location(candidate)
+    index = location_index(session)
+    reviewed_pairs = set(session.execute(
+        select(LocationMatchReview.object_record_id, LocationMatchReview.location_record_id)
+    ).tuples())
+    pairs = []
+    for registration_no, group in sorted(index.groups.items()):
+        candidates = [row for row in group if row.source_id == source_id] if source_id else group
+        location_rows = [
+            row for row in candidates if row.source_id in index.storage_sources and row.location
         ]
+        if not location_rows:
+            continue
         # A storage-list row with a blank shelf is still a storage row, never an object row.
-        object_records = [candidate for candidate in candidates if candidate.source_id not in storage_sources]
-        for object_record in object_records:
-            for location_record in location_records:
-                review = reviewed_pairs.get((object_record.id, location_record.id))
-                if review is not None:
-                    continue
-                items.append({
-                    "registration_no": registration_no,
-                    "object_record": record_summary(object_record),
-                    "location_record": {
-                        **record_summary(location_record),
-                        "location": record_location(location_record),
-                    },
-                    "title_conflict": title_conflict(object_record, location_record),
-                    "requires_review": True,
-                })
+        object_rows = [row for row in candidates if row.source_id not in index.storage_sources]
+        for object_row in object_rows:
+            for location_row in location_rows:
+                if (object_row.id, location_row.id) not in reviewed_pairs:
+                    pairs.append((registration_no, object_row, location_row))
+
+    shown = pairs[:limit]
+    record_ids = {row.id for _, object_row, location_row in shown for row in (object_row, location_row)}
+    records = {
+        record.id: record
+        for record in session.scalars(
+            select(Record).where(Record.id.in_(record_ids)).options(selectinload(Record.source))
+        )
+    } if record_ids else {}
+    items = [
+        {
+            "registration_no": registration_no,
+            "object_record": record_summary(records[object_row.id]),
+            "location_record": {**record_summary(records[location_row.id]), "location": location_row.location},
+            "title_conflict": titles_conflict(object_row.title_description, location_row.title_description),
+            "requires_review": True,
+        }
+        for registration_no, object_row, location_row in shown
+    ]
     return {
-        "total": len(items),
-        "items": items[:limit],
+        "total": len(pairs),
+        "items": items,
         "message": "รายการนี้เป็นเพียงข้อเสนอการจับคู่ ยังไม่เปลี่ยนข้อมูลตำแหน่งของวัตถุ",
     }
 
@@ -835,17 +892,14 @@ def location_match_report(session: Annotated[Session, Depends(get_session)]) -> 
     measure of what *could* be linked, not of what staff have approved.
     """
     source_names = dict(session.execute(select(DataSource.id, DataSource.name)).all())
-    rows = session.execute(select(
-        Record.id, Record.source_id, Record.registration_no, Record.title_description, Record.raw_data,
-    )).all()
+    index = location_index(session)
 
-    storage_sources = {row.source_id for row in rows if location_from_raw(row.raw_data)}
     object_keys: dict[str, list] = {}
     location_rows = []
     object_total = 0
-    for row in rows:
-        key = normalise_registration_no(row.registration_no)
-        if row.source_id in storage_sources:
+    for row in index.rows:
+        key = row.key
+        if row.source_id in index.storage_sources:
             location_rows.append((row, key))
         else:
             object_total += 1
@@ -872,7 +926,7 @@ def location_match_report(session: Annotated[Session, Depends(get_session)]) -> 
             "pairs": 0, "title_conflict_pairs": 0, "approved": 0, "rejected": 0, "pending": 0,
         })
         summary["rows"] += 1
-        if not location_from_raw(row.raw_data):
+        if not row.location:
             summary["missing_location"] += 1
         if not clean_text(row.registration_no):
             summary["missing_registration"] += 1
@@ -888,7 +942,7 @@ def location_match_report(session: Annotated[Session, Depends(get_session)]) -> 
             summary["unmatched_by_year"][registration_year_bucket(key)] += 1
             continue
         summary["matched"] += 1
-        if not location_from_raw(row.raw_data):
+        if not row.location:
             # Registered object, but this row has no shelf to propose.
             continue
         matched_object_keys.add(key)
@@ -940,12 +994,27 @@ def dashboard(
     source_id: int | None = None,
     source_sheet: str | None = None,
 ) -> dict:
-    statement = select(Record)
+    return cached_for_records(
+        session,
+        f"dashboard:{source_id or ''}:{source_sheet or ''}",
+        lambda: compute_dashboard(session, source_id, source_sheet),
+    )
+
+
+DASHBOARD_COLUMNS = (
+    Record.registration_no, Record.title_description, Record.image_url, Record.source_sheet,
+    Record.status_data_check, Record.status_photographed, Record.status_antique, Record.status_storage,
+)
+
+
+def compute_dashboard(session: Session, source_id: int | None, source_sheet: str | None) -> dict:
+    # Only the summary columns: loading whole records (with raw_data) made this slow.
+    statement = select(*DASHBOARD_COLUMNS)
     if source_id:
         statement = statement.where(Record.source_id == source_id)
     if source_sheet:
         statement = statement.where(Record.source_sheet == source_sheet)
-    records = session.scalars(statement).all()
+    records = session.execute(statement).all()
     registration_counts = Counter(record.registration_no for record in records if record.registration_no)
     duplicate_registration_counts = {
         registration_no: count for registration_no, count in registration_counts.items() if count > 1

@@ -100,30 +100,60 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     </tr>`;
   }
 
-  function bindQualityActions() {
-    bindRecordLinks("#quality-body [data-record-id]");
-    bindRecordLinks("#location-match-body [data-record-id]");
-    bindRecordLinks("#location-reviewed-body [data-record-id]");
-    document.querySelectorAll("[data-location-review-undo]").forEach((button) => {
+
+  const OPEN_PANELS_KEY = "quality-open-panels";
+  // Sections whose table shows current data; a stale section reloads when opened.
+  const freshPanels = new Set();
+  const metricValues = {};
+  let isAdmin = false;
+  let panelsBound = false;
+
+  function rememberOpenPanels() {
+    const open = [...document.querySelectorAll("[data-quality-panel]")]
+      .filter((panel) => panel.open)
+      .map((panel) => panel.dataset.qualityPanel);
+    try {
+      window.localStorage.setItem(OPEN_PANELS_KEY, JSON.stringify(open));
+    } catch {
+      // Remembering open sections is only a convenience.
+    }
+  }
+
+  function restoreOpenPanels() {
+    let open = [];
+    try {
+      open = JSON.parse(window.localStorage.getItem(OPEN_PANELS_KEY) || "[]");
+    } catch {
+      open = [];
+    }
+    document.querySelectorAll("[data-quality-panel]").forEach((panel) => {
+      panel.open = open.includes(panel.dataset.qualityPanel);
+    });
+  }
+
+  function setPanelCount(name, text) {
+    const target = document.querySelector(`[data-quality-count="${name}"]`);
+    if (target) target.textContent = text;
+  }
+
+  function bindActions(container) {
+    bindRecordLinks(`${container} [data-record-id]`);
+    document.querySelectorAll(`${container} [data-location-review-undo]`).forEach((button) => {
       button.addEventListener("click", () => undoLocationReview(button.dataset.locationReviewUndo));
     });
-    document.querySelectorAll("[data-quality-resolve]").forEach((button) => {
-      button.addEventListener("click", () => {
-        updateQualityIssue(button.dataset.qualityResolve, true);
-      });
+    document.querySelectorAll(`${container} [data-quality-resolve]`).forEach((button) => {
+      button.addEventListener("click", () => updateQualityIssue(button.dataset.qualityResolve, true));
     });
-    document.querySelectorAll("[data-quality-reopen]").forEach((button) => {
-      button.addEventListener("click", () => {
-        updateQualityIssue(button.dataset.qualityReopen, false);
-      });
+    document.querySelectorAll(`${container} [data-quality-reopen]`).forEach((button) => {
+      button.addEventListener("click", () => updateQualityIssue(button.dataset.qualityReopen, false));
     });
-    document.querySelectorAll("[data-location-match-approve]").forEach((button) => {
+    document.querySelectorAll(`${container} [data-location-match-approve]`).forEach((button) => {
       button.addEventListener("click", () => {
         const [objectRecordId, locationRecordId] = button.dataset.locationMatchApprove.split(":");
         updateLocationMatch(objectRecordId, locationRecordId, "approved");
       });
     });
-    document.querySelectorAll("[data-location-match-reject]").forEach((button) => {
+    document.querySelectorAll(`${container} [data-location-match-reject]`).forEach((button) => {
       button.addEventListener("click", () => {
         const [objectRecordId, locationRecordId] = button.dataset.locationMatchReject.split(":");
         updateLocationMatch(objectRecordId, locationRecordId, "rejected");
@@ -131,84 +161,166 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     });
   }
 
-  async function loadDataQuality() {
+  async function fetchJson(url, failureMessage) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(failureMessage);
+    return response.json();
+  }
+
+  function renderMetrics() {
+    const metrics = [
+      ["ประเด็นที่แสดง", metricValues.issues],
+      ["ต้องแก้ไข", metricValues.errors],
+      ["ควรตรวจสอบ", metricValues.warnings],
+      ["รอตรวจตำแหน่ง", metricValues.pending],
+    ];
+    $("#quality-metrics").innerHTML = metrics
+      .map(([label, value]) => renderMetric(label, value ?? "…"))
+      .join("");
+  }
+
+  async function loadIssues() {
     const sourceSelect = $("#quality-source-filter");
     const selectedSource = sourceSelect.value;
     const params = new URLSearchParams({ page: "1", page_size: "100" });
     if (selectedSource) params.set("source_id", selectedSource);
     const severity = $("#quality-severity-filter").value;
     if (severity) params.set("severity", severity);
-    if ($("#quality-include-resolved").checked) {
-      params.set("include_resolved", "true");
-    }
-    const [issuesResponse, catalogResponse, sessionResponse, locationResponse, reportResponse, reviewedResponse] = await Promise.all([
-      fetch(`/api/data-quality/issues?${params}`),
-      fetch("/api/catalog"),
-      fetch("/api/admin/session"),
-      fetch("/api/location-match-candidates?limit=100"),
-      fetch("/api/location-match-report"),
-      fetch("/api/location-match-reviews"),
+    if ($("#quality-include-resolved").checked) params.set("include_resolved", "true");
+    const [data, catalog] = await Promise.all([
+      fetchJson(`/api/data-quality/issues?${params}`, "ไม่สามารถโหลดประเด็นคุณภาพข้อมูลได้"),
+      fetchJson("/api/catalog", "ไม่สามารถโหลดรายชื่อแหล่งข้อมูลได้"),
     ]);
-    if (!issuesResponse.ok) {
-      throw new Error("ไม่สามารถโหลดประเด็นคุณภาพข้อมูลได้");
-    }
-    const data = await issuesResponse.json();
-    const catalog = await catalogResponse.json();
-    const adminSession = await sessionResponse.json();
-    const locationMatches = locationResponse.ok
-      ? await locationResponse.json()
-      : { total: 0, items: [], message: "ไม่สามารถโหลดรายการตรวจการเชื่อมตำแหน่งได้" };
-    const sourceStillExists = catalog.sources.some(
-      (source) => String(source.id) === selectedSource,
-    );
+    const sourceStillExists = catalog.sources.some((source) => String(source.id) === selectedSource);
     sourceSelect.innerHTML = `<option value="">ทุกแหล่งข้อมูล</option>${renderSelectOptions(catalog.sources, sourceStillExists ? selectedSource : "")}`;
-    const metrics = [
-      ["ประเด็นที่แสดง", data.total],
-      ["ต้องแก้ไข", data.summary.errors],
-      ["ควรตรวจสอบ", data.summary.warnings],
-      ["รอตรวจตำแหน่ง", locationMatches.total],
-    ];
-    $("#quality-metrics").innerHTML = metrics
-      .map(([label, value]) => renderMetric(label, value))
-      .join("");
+    Object.assign(metricValues, {
+      issues: data.total,
+      errors: data.summary.errors,
+      warnings: data.summary.warnings,
+    });
+    renderMetrics();
+    setPanelCount("issues", `${data.total.toLocaleString()} ประเด็น`);
     $("#quality-summary").textContent =
       data.total > data.items.length
         ? `พบ ${data.total.toLocaleString()} ประเด็น · แสดง 100 รายการล่าสุด`
         : `พบ ${data.total.toLocaleString()} ประเด็น`;
     $("#quality-body").innerHTML =
-      data.items
-        .map((issue) => renderQualityIssue(issue, adminSession.authenticated))
-        .join("") ||
-      `<tr><td colspan="5" class="muted">ไม่พบประเด็นตามเงื่อนไข</td></tr>`;
-    $("#location-match-summary").textContent = locationMatches.total
-      ? `พบ ${locationMatches.total.toLocaleString()} คู่ที่รอตรวจ · แสดงสูงสุด 100 คู่ · ${locationMatches.message}`
-      : locationMatches.message;
-    $("#location-match-body").innerHTML = locationMatches.items
-      .map((candidate) => renderLocationMatch(candidate, adminSession.authenticated))
+      data.items.map((issue) => renderQualityIssue(issue, isAdmin)).join("")
+      || `<tr><td colspan="5" class="muted">ไม่พบประเด็นตามเงื่อนไข</td></tr>`;
+    bindActions("#quality-body");
+  }
+
+  async function loadReport() {
+    $("#location-report-summary").textContent = "กำลังโหลดรายงาน…";
+    const report = await fetchJson("/api/location-match-report", "ไม่สามารถโหลดรายงานผลการจับคู่ได้");
+    const objects = report.object_records;
+    $("#location-report-summary").textContent =
+      `ทะเบียนวัตถุ ${objects.rows.toLocaleString()} แถว (${objects.distinct_keys.toLocaleString()} เลข) · `
+      + `มีตำแหน่งเสนอให้ ${objects.keys_with_location.toLocaleString()} เลข · ${report.message}`;
+    $("#location-report-body").innerHTML = report.location_sources
+      .map((source) => renderReportRow(source, report.register_start_year))
+      .join("") || `<tr><td colspan="9" class="muted">ยังไม่มีแหล่งข้อมูลที่มีคอลัมน์ตำแหน่ง</td></tr>`;
+    const matched = report.location_sources.reduce((sum, source) => sum + source.matched, 0);
+    setPanelCount("report", `พบในทะเบียน ${matched.toLocaleString()} แถว`);
+  }
+
+  async function loadCandidates({ countOnly = false } = {}) {
+    if (!countOnly) $("#location-match-summary").textContent = "กำลังโหลดคู่ที่รอตรวจ…";
+    const matches = await fetchJson(
+      `/api/location-match-candidates?limit=${countOnly ? 1 : 100}`,
+      "ไม่สามารถโหลดรายการตรวจการเชื่อมตำแหน่งได้",
+    );
+    metricValues.pending = matches.total;
+    renderMetrics();
+    setPanelCount("candidates", `รอตรวจ ${matches.total.toLocaleString()} คู่`);
+    if (countOnly) return;
+    $("#location-match-summary").textContent = matches.total
+      ? `พบ ${matches.total.toLocaleString()} คู่ที่รอตรวจ · แสดงสูงสุด 100 คู่ · ${matches.message}`
+      : matches.message;
+    $("#location-match-body").innerHTML = matches.items
+      .map((candidate) => renderLocationMatch(candidate, isAdmin))
       .join("") || `<tr><td colspan="5" class="muted">ยังไม่มีคู่ข้อมูลที่พร้อมให้ตรวจ โปรดนำเข้าทั้งทะเบียนหลักและข้อมูลตำแหน่งก่อน</td></tr>`;
+    bindActions("#location-match-body");
+  }
 
-    if (reportResponse.ok) {
-      const report = await reportResponse.json();
-      const objects = report.object_records;
-      $("#location-report-summary").textContent =
-        `ทะเบียนวัตถุ ${objects.rows.toLocaleString()} แถว (${objects.distinct_keys.toLocaleString()} เลข) · `
-        + `มีตำแหน่งเสนอให้ ${objects.keys_with_location.toLocaleString()} เลข · ${report.message}`;
-      $("#location-report-body").innerHTML = report.location_sources
-        .map((source) => renderReportRow(source, report.register_start_year))
-        .join("") || `<tr><td colspan="9" class="muted">ยังไม่มีแหล่งข้อมูลที่มีคอลัมน์ตำแหน่ง</td></tr>`;
-    } else {
-      $("#location-report-summary").textContent = "ไม่สามารถโหลดรายงานผลการจับคู่ได้";
-      $("#location-report-body").innerHTML = "";
-    }
-
-    const reviewed = reviewedResponse.ok ? await reviewedResponse.json() : { total: 0, items: [] };
+  async function loadReviewed({ countOnly = false } = {}) {
+    const reviewed = await fetchJson(
+      `/api/location-match-reviews?limit=${countOnly ? 1 : 200}`,
+      "ไม่สามารถโหลดผลตรวจที่บันทึกแล้วได้",
+    );
+    setPanelCount("reviewed", `${reviewed.total.toLocaleString()} คู่`);
+    if (countOnly) return;
     $("#location-reviewed-summary").textContent = reviewed.total
       ? `บันทึกผลตรวจแล้ว ${reviewed.total.toLocaleString()} คู่`
       : "ยังไม่มีผลตรวจที่บันทึก";
     $("#location-reviewed-body").innerHTML = reviewed.items
-      .map((review) => renderReviewedMatch(review, adminSession.authenticated))
+      .map((review) => renderReviewedMatch(review, isAdmin))
       .join("") || `<tr><td colspan="5" class="muted">ยังไม่มีผลตรวจ</td></tr>`;
-    bindQualityActions();
+    bindActions("#location-reviewed-body");
+  }
+
+  const PANEL_LOADERS = {
+    issues: loadIssues,
+    report: loadReport,
+    candidates: () => loadCandidates(),
+    reviewed: () => loadReviewed(),
+  };
+  const PANEL_SUMMARY_TARGETS = {
+    issues: "#quality-summary",
+    report: "#location-report-summary",
+    candidates: "#location-match-summary",
+    reviewed: "#location-reviewed-summary",
+  };
+
+  function loadPanel(name) {
+    freshPanels.add(name);
+    return runPanel(name);
+  }
+
+  async function runPanel(name) {
+    try {
+      await PANEL_LOADERS[name]();
+    } catch (error) {
+      freshPanels.delete(name);
+      $(PANEL_SUMMARY_TARGETS[name]).textContent = error.message;
+    }
+  }
+
+  function bindPanels() {
+    if (panelsBound) return;
+    panelsBound = true;
+    restoreOpenPanels();
+    document.querySelectorAll("[data-quality-panel]").forEach((panel) => {
+      panel.addEventListener("toggle", () => {
+        rememberOpenPanels();
+        const name = panel.dataset.qualityPanel;
+        if (panel.open && !freshPanels.has(name)) loadPanel(name);
+      });
+    });
+  }
+
+  function isPanelOpen(name) {
+    return Boolean(document.querySelector(`[data-quality-panel="${name}"]`)?.open);
+  }
+
+  // Counts for every section come first; a table loads only while its section is open.
+  async function loadDataQuality() {
+    bindPanels();
+    // Claim the sections loaded here before awaiting, so the toggle events
+    // queued by restoring open sections do not load them a second time.
+    freshPanels.clear();
+    const panels = ["issues", ...["report", "candidates", "reviewed"].filter(isPanelOpen)];
+    panels.forEach((name) => freshPanels.add(name));
+    const session = await fetch("/api/admin/session")
+      .then((response) => (response.ok ? response.json() : {}))
+      .catch(() => ({}));
+    isAdmin = Boolean(session.authenticated);
+    const ignore = () => {};
+    await Promise.all([
+      ...panels.map(runPanel),
+      panels.includes("candidates") ? null : loadCandidates({ countOnly: true }).catch(ignore),
+      panels.includes("reviewed") ? null : loadReviewed({ countOnly: true }).catch(ignore),
+    ]);
   }
 
   async function updateQualityIssue(issueId, isResolved) {
@@ -251,5 +363,5 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     }
   }
 
-  return { loadDataQuality };
+  return { loadDataQuality, loadIssues: () => loadPanel("issues") };
 }

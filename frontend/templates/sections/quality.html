@@ -2,30 +2,36 @@
   <div class="section-heading">
     <div>
       <h2>คุณภาพข้อมูล</h2>
-      <p>ตรวจสอบประเด็นที่ระบบพบระหว่าง import หรือ sync โดยไม่แก้ไขข้อมูลต้นทาง</p>
+      <p>ตรวจสอบประเด็นที่ระบบพบระหว่าง import หรือ sync โดยไม่แก้ไขข้อมูลต้นทาง กดหัวข้อเพื่อเปิดส่วนที่ต้องการจัดการ</p>
     </div>
   </div>
   <div id="quality-metrics" class="metrics"></div>
-  <form id="quality-filter-form" class="filters quality-filters">
-    <label>แหล่งข้อมูล<select id="quality-source-filter"><option value="">ทุกแหล่งข้อมูล</option></select></label>
-    <label>ความสำคัญ<select id="quality-severity-filter"><option value="">ทุกระดับ</option><option value="error">ต้องแก้ไข</option><option value="warning">ควรตรวจสอบ</option></select></label>
-    <label class="checkbox"><input id="quality-include-resolved" type="checkbox" />แสดงรายการที่ปิดแล้ว</label>
-    <button type="submit">แสดงประเด็น</button>
-  </form>
-  <p id="quality-summary" class="muted"></p>
-  <div class="table-wrap">
-    <table class="quality-table">
-      <thead><tr><th>ระดับ</th><th>ประเด็น</th><th>ตำแหน่งต้นทาง</th><th>ระเบียน</th><th>สถานะ</th></tr></thead>
-      <tbody id="quality-body"></tbody>
-    </table>
-  </div>
-  <section class="location-match-review" aria-labelledby="location-report-heading">
-    <div class="section-heading compact-heading">
-      <div>
-        <h3 id="location-report-heading">รายงานผลการจับคู่ทะเบียนกับตำแหน่ง</h3>
-        <p>นับแถวจากแหล่งข้อมูลตำแหน่งว่าเลขทะเบียนตรงกับทะเบียนวัตถุได้กี่รายการ เป็นตัวเลขเพื่อประเมิน pilot ไม่ใช่ผลยืนยันว่าเป็นวัตถุชิ้นเดียวกัน</p>
-      </div>
+
+  <details class="panel admin-records quality-panel" data-quality-panel="issues">
+    <summary>
+      <span><strong>ประเด็นจากการนำเข้า</strong><span class="muted">ข้อผิดพลาดและคำเตือนที่พบระหว่าง import หรือ sync</span></span>
+      <span class="quality-panel-count" data-quality-count="issues"></span>
+    </summary>
+    <form id="quality-filter-form" class="filters quality-filters">
+      <label>แหล่งข้อมูล<select id="quality-source-filter"><option value="">ทุกแหล่งข้อมูล</option></select></label>
+      <label>ความสำคัญ<select id="quality-severity-filter"><option value="">ทุกระดับ</option><option value="error">ต้องแก้ไข</option><option value="warning">ควรตรวจสอบ</option></select></label>
+      <label class="checkbox"><input id="quality-include-resolved" type="checkbox" />แสดงรายการที่ปิดแล้ว</label>
+      <button type="submit">แสดงประเด็น</button>
+    </form>
+    <p id="quality-summary" class="muted"></p>
+    <div class="table-wrap">
+      <table class="quality-table">
+        <thead><tr><th>ระดับ</th><th>ประเด็น</th><th>ตำแหน่งต้นทาง</th><th>ระเบียน</th><th>สถานะ</th></tr></thead>
+        <tbody id="quality-body"></tbody>
+      </table>
     </div>
+  </details>
+
+  <details class="panel admin-records quality-panel" data-quality-panel="report">
+    <summary>
+      <span><strong>รายงานผลการจับคู่ทะเบียนกับตำแหน่ง</strong><span class="muted">ตัวเลขเพื่อประเมิน pilot ไม่ใช่ผลยืนยันว่าเป็นวัตถุชิ้นเดียวกัน</span></span>
+      <span class="quality-panel-count" data-quality-count="report"></span>
+    </summary>
     <p id="location-report-summary" class="muted"></p>
     <div class="table-wrap">
       <table class="quality-table location-report-table">
@@ -36,14 +42,13 @@
         <tbody id="location-report-body"></tbody>
       </table>
     </div>
-  </section>
-  <section class="location-match-review" aria-labelledby="location-match-heading">
-    <div class="section-heading compact-heading">
-      <div>
-        <h3 id="location-match-heading">ตรวจการเชื่อมตำแหน่งจัดเก็บ</h3>
-        <p>ระบบเสนอคู่ที่มีเลขทะเบียนตรงกันและมีข้อมูลตำแหน่งจากอีกแหล่งหนึ่ง การอนุมัติจะเก็บหลักฐานทั้งสองระเบียนไว้ ไม่รวมข้อมูลต้นทางเข้าด้วยกัน</p>
-      </div>
-    </div>
+  </details>
+
+  <details class="panel admin-records quality-panel" data-quality-panel="candidates">
+    <summary>
+      <span><strong>ตรวจการเชื่อมตำแหน่งจัดเก็บ</strong><span class="muted">คู่ที่เลขทะเบียนตรงกันและรอเจ้าหน้าที่อนุมัติ การอนุมัติไม่รวมข้อมูลต้นทางเข้าด้วยกัน</span></span>
+      <span class="quality-panel-count" data-quality-count="candidates"></span>
+    </summary>
     <p id="location-match-summary" class="muted"></p>
     <div class="table-wrap">
       <table class="quality-table location-match-table">
@@ -51,14 +56,13 @@
         <tbody id="location-match-body"></tbody>
       </table>
     </div>
-  </section>
-  <section class="location-match-review" aria-labelledby="location-reviewed-heading">
-    <div class="section-heading compact-heading">
-      <div>
-        <h3 id="location-reviewed-heading">ผลตรวจที่บันทึกแล้ว</h3>
-        <p>ยกเลิกผลตรวจได้ถ้าบันทึกผิด คู่นั้นจะกลับไปอยู่ในรายการรอตรวจ และระบบเก็บประวัติการยกเลิกไว้</p>
-      </div>
-    </div>
+  </details>
+
+  <details class="panel admin-records quality-panel" data-quality-panel="reviewed">
+    <summary>
+      <span><strong>ผลตรวจที่บันทึกแล้ว</strong><span class="muted">ยกเลิกได้ถ้าบันทึกผิด คู่นั้นจะกลับไปรอตรวจ และระบบเก็บประวัติการยกเลิกไว้</span></span>
+      <span class="quality-panel-count" data-quality-count="reviewed"></span>
+    </summary>
     <p id="location-reviewed-summary" class="muted"></p>
     <div class="table-wrap">
       <table class="quality-table location-match-table">
@@ -66,5 +70,5 @@
         <tbody id="location-reviewed-body"></tbody>
       </table>
     </div>
-  </section>
+  </details>
 </section>

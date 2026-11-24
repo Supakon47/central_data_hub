@@ -15,7 +15,7 @@ import { fetchGoogleSourceState, fillGoogleSourceForm, renderGoogleSourceCard, r
 import { adminFetch } from "./api.js";
 import { pushRoute, routeFromLocation } from "./router.js";
 
-const BUILD_VERSION = "2026.11.23.2";
+const BUILD_VERSION = "2026.11.24.1";
 
 // Keep card pages even at the common six-card desktop layout.
 state.pageSize = 24;
@@ -467,8 +467,8 @@ async function initialise() {
       : `ระบบพร้อมใช้งาน · build ${BUILD_VERSION}`;
   if (!window.history.state)
     window.history.replaceState({ view: "explorer" }, "", window.location.href);
-  await loadFilterOptions();
-  await loadRecords();
+  // Filter choices and the first page of records do not depend on each other.
+  await Promise.all([loadFilterOptions(), loadRecords()]);
   await renderRoute();
 }
 document
@@ -507,9 +507,7 @@ $("#admin-image-intake-form").addEventListener("submit", (event) =>
 );
 $("#quality-filter-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  loadDataQuality().catch((error) => {
-    $("#quality-summary").textContent = error.message;
-  });
+  quality.loadIssues();
 });
 $("#admin-search-form").addEventListener("submit", (event) => {
   event.preventDefault();
