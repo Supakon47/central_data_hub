@@ -6,9 +6,17 @@ from sqlalchemy import func, select
 from ..dependencies import AdminDep, SessionDep
 from ..models import DataQualityIssue, DataSource, Record
 from ..schemas import DataQualityIssueResolution
+from ..services import completeness
 from ..services.audit import add_audit
+from ..services.cache import cached_for_records
 
 router = APIRouter(tags=["data quality"])
+
+
+@router.get("/api/data-completeness")
+def data_completeness(session: SessionDep) -> dict:
+    """Filled-field counts per source and sheet, to see what the source files are missing."""
+    return cached_for_records(session, "data_completeness", lambda: completeness.data_completeness(session))
 
 
 @router.get("/api/data-quality/issues")

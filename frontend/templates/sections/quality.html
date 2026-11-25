@@ -37,9 +37,40 @@
       <table class="quality-table location-report-table">
         <thead><tr>
           <th>แหล่งข้อมูลตำแหน่ง</th><th>แถว</th><th>ใช้จับคู่ได้</th><th>เลขว่าง / ชั่วคราว</th>
-          <th>พบในทะเบียน</th><th>ไม่พบในทะเบียน</th><th>เลขซ้ำในแหล่ง</th><th>ชื่อไม่ตรงกัน</th><th>ผลตรวจ</th>
+          <th>พบในทะเบียน</th><th>ไม่พบในทะเบียน</th><th>เลขซ้ำในแหล่ง</th><th>ตำแหน่งขัดแย้ง</th><th>ชื่อไม่ตรงกัน</th><th>ผลตรวจ</th>
         </tr></thead>
         <tbody id="location-report-body"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="panel admin-records quality-panel" data-quality-panel="completeness">
+    <summary>
+      <span><strong>ความครบถ้วนของข้อมูล</strong><span class="muted">แต่ละไฟล์/ชีตมีข้อมูลช่องไหนกี่แถว ใช้ดูว่าต้นทางขาดอะไรและควรขอข้อมูลเพิ่มตรงไหน</span></span>
+      <span class="quality-panel-count" data-quality-count="completeness"></span>
+    </summary>
+    <p id="completeness-summary" class="muted"></p>
+    <div class="table-wrap">
+      <table class="quality-table completeness-table">
+        <thead><tr>
+          <th>แหล่งข้อมูล / ชีต</th><th>แถว</th><th>เลขทะเบียน</th><th>ใช้จับคู่ได้</th><th>ชื่อ/รายการ</th>
+          <th>วัสดุ</th><th>อายุสมัย</th><th>ขนาด</th><th>ตำแหน่ง</th><th>ภาพ</th>
+        </tr></thead>
+        <tbody id="completeness-body"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="panel admin-records quality-panel" data-quality-panel="conflicts">
+    <summary>
+      <span><strong>ตำแหน่งขัดแย้ง</strong><span class="muted">เลขทะเบียนเดียวกันถูกบันทึกไว้ต่างตำแหน่ง ต้องตรวจว่าวัตถุอยู่ที่ใดจริง</span></span>
+      <span class="quality-panel-count" data-quality-count="conflicts"></span>
+    </summary>
+    <p id="conflicts-summary" class="muted"></p>
+    <div class="table-wrap">
+      <table class="quality-table location-match-table">
+        <thead><tr><th>เลขทะเบียน</th><th>ระเบียนและตำแหน่งที่บันทึกไว้</th></tr></thead>
+        <tbody id="conflicts-body"></tbody>
       </table>
     </div>
   </details>

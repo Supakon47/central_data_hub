@@ -49,6 +49,9 @@ class SourceSheetConfig(Base):
     sheet_name: Mapped[str] = mapped_column(String(255))
     read_range: Mapped[str] = mapped_column(String(255), default="A:ZZ")
     header_row_number: Mapped[int] = mapped_column(Integer, default=1)
+    # "register" (object descriptions) or "location" (storage-room list); set
+    # by an import profile. None keeps the older whole-source rule.
+    role: Mapped[str | None] = mapped_column(String(20))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

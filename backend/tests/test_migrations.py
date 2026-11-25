@@ -1,11 +1,12 @@
 """Migrations must build exactly the schema the models describe."""
 
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import inspect, text
 
 from app.database import Base, engine
-from app.db_upgrade import upgrade_database
+from app.db_upgrade import BASELINE_REVISION, alembic_config, upgrade_database
 
 
 def schema_differences() -> list:
@@ -34,7 +35,10 @@ def test_migrations_build_the_model_schema_on_an_empty_database():
 
 def test_a_database_from_before_migrations_is_stamped_not_recreated():
     drop_everything()
-    Base.metadata.create_all(bind=engine)  # how the app created tables before Alembic
+    # A database from before Alembic: the baseline tables, but no version table.
+    command.upgrade(alembic_config(), BASELINE_REVISION)
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE alembic_version"))
     with engine.begin() as connection:
         connection.execute(text(
             "INSERT INTO data_sources (name, connection_type, classification, is_active) "

@@ -53,6 +53,7 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
       <td>${n(source.unmatched)}
         <br><span class="muted">ก่อนปี ${startYear} ${n(years.before_register)} · ตั้งแต่ ${startYear} ${n(years.since_register)} · ไม่มีปี ${n(years.no_year)}</span></td>
       <td>${n(source.duplicate_keys)} เลข<br><span class="muted">${n(source.duplicate_rows)} แถว</span></td>
+      <td>${n(source.location_conflict_keys)} เลข</td>
       <td>${n(source.title_conflict_pairs)} / ${n(source.pairs)} คู่</td>
       <td>อนุมัติ ${n(source.approved)}<br>ไม่ใช่ ${n(source.rejected)}<br>รอตรวจ ${n(source.pending)}</td>
     </tr>`;
@@ -220,9 +221,66 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
       + `มีตำแหน่งเสนอให้ ${objects.keys_with_location.toLocaleString()} เลข · ${report.message}`;
     $("#location-report-body").innerHTML = report.location_sources
       .map((source) => renderReportRow(source, report.register_start_year))
-      .join("") || `<tr><td colspan="9" class="muted">ยังไม่มีแหล่งข้อมูลที่มีคอลัมน์ตำแหน่ง</td></tr>`;
+      .join("") || `<tr><td colspan="10" class="muted">ยังไม่มีแหล่งข้อมูลที่มีคอลัมน์ตำแหน่ง</td></tr>`;
     const matched = report.location_sources.reduce((sum, source) => sum + source.matched, 0);
     setPanelCount("report", `พบในทะเบียน ${matched.toLocaleString()} แถว`);
+  }
+
+  const COMPLETENESS_FIELDS = ["registration", "matching_key", "title", "material", "period", "dimensions", "location", "image"];
+  const ROLE_LABELS = { register: "ทะเบียน", location: "ตำแหน่ง" };
+
+  // A filled count with its share of the rows; empty fields are highlighted.
+  function completenessCell(filled, rows) {
+    const share = rows ? Math.round((filled / rows) * 100) : 0;
+    const tone = share === 0 ? " completeness-none" : share < 50 ? " completeness-low" : "";
+    return `<td class="completeness-cell${tone}">${share}%<br><span class="muted">${filled.toLocaleString()}</span></td>`;
+  }
+
+  function completenessRow(label, counts, className = "") {
+    return `<tr class="${className}">
+      <td>${label}</td><td>${counts.rows.toLocaleString()}</td>
+      ${COMPLETENESS_FIELDS.map((field) => completenessCell(counts[field], counts.rows)).join("")}
+    </tr>`;
+  }
+
+  async function loadCompleteness() {
+    $("#completeness-summary").textContent = "กำลังคำนวณ…";
+    const data = await fetchJson("/api/data-completeness", "ไม่สามารถโหลดรายงานความครบถ้วนได้");
+    const rows = data.sources.flatMap((source) => [
+      completenessRow(`<strong>${escapeHtml(source.source_name || `แหล่ง #${source.source_id}`)}</strong>`,
+        source.totals, "completeness-source"),
+      ...source.sheets.map((sheet) => completenessRow(
+        `<span class="completeness-sheet">${escapeHtml(sheet.sheet)}</span>${sheet.role ? ` <span class="badge">${ROLE_LABELS[sheet.role] || sheet.role}</span>` : ""}`,
+        sheet,
+      )),
+    ]);
+    $("#completeness-body").innerHTML = rows.join("")
+      || `<tr><td colspan="10" class="muted">ยังไม่มีข้อมูล</td></tr>`;
+    $("#completeness-summary").textContent =
+      "ร้อยละของแถวที่มีข้อมูลในแต่ละช่อง · ช่องสีแดงคือไม่มีข้อมูลเลย สีเหลืองคือมีไม่ถึงครึ่ง";
+    setPanelCount("completeness", `${data.sources.length.toLocaleString()} แหล่ง`);
+  }
+
+  function renderConflict(item) {
+    const rows = item.rows.map((row) => `<div class="conflict-row">
+      ${renderLocationRecord(row, row.location)}
+    </div>`).join("");
+    return `<tr><td><strong>${escapeHtml(item.registration_no)}</strong></td><td><div class="conflict-rows">${rows}</div></td></tr>`;
+  }
+
+  async function loadConflicts({ countOnly = false } = {}) {
+    const data = await fetchJson(
+      `/api/location-conflicts?limit=${countOnly ? 1 : 100}`,
+      "ไม่สามารถโหลดรายการตำแหน่งขัดแย้งได้",
+    );
+    setPanelCount("conflicts", `${data.total.toLocaleString()} เลข`);
+    if (countOnly) return;
+    $("#conflicts-summary").textContent = data.total
+      ? `พบ ${data.total.toLocaleString()} เลขทะเบียน · แสดงสูงสุด 100 เลข · ${data.message}`
+      : "ไม่พบเลขทะเบียนที่ถูกบันทึกต่างตำแหน่ง";
+    $("#conflicts-body").innerHTML = data.items.map(renderConflict).join("")
+      || `<tr><td colspan="2" class="muted">ไม่มีรายการ</td></tr>`;
+    bindActions("#conflicts-body");
   }
 
   async function loadCandidates({ countOnly = false } = {}) {
@@ -265,12 +323,16 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     report: loadReport,
     candidates: () => loadCandidates(),
     reviewed: () => loadReviewed(),
+    completeness: loadCompleteness,
+    conflicts: () => loadConflicts(),
   };
   const PANEL_SUMMARY_TARGETS = {
     issues: "#quality-summary",
     report: "#location-report-summary",
     candidates: "#location-match-summary",
     reviewed: "#location-reviewed-summary",
+    completeness: "#completeness-summary",
+    conflicts: "#conflicts-summary",
   };
 
   function loadPanel(name) {
@@ -310,7 +372,7 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     // Claim the sections loaded here before awaiting, so the toggle events
     // queued by restoring open sections do not load them a second time.
     freshPanels.clear();
-    const panels = ["issues", ...["report", "candidates", "reviewed"].filter(isPanelOpen)];
+    const panels = ["issues", ...["report", "candidates", "reviewed", "completeness", "conflicts"].filter(isPanelOpen)];
     panels.forEach((name) => freshPanels.add(name));
     const session = await fetchAdminSession();
     isAdmin = Boolean(session.authenticated);
@@ -319,6 +381,7 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
       ...panels.map(runPanel),
       panels.includes("candidates") ? null : loadCandidates({ countOnly: true }).catch(ignore),
       panels.includes("reviewed") ? null : loadReviewed({ countOnly: true }).catch(ignore),
+      panels.includes("conflicts") ? null : loadConflicts({ countOnly: true }).catch(ignore),
     ]);
   }
 

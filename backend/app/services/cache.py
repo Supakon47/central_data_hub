@@ -5,18 +5,21 @@ from collections.abc import Callable
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import DataSource, Record
+from ..models import DataSource, Record, SourceSheetConfig
 
 _RESULT_CACHE: dict[str, tuple[tuple, object]] = {}
 
 
 def records_version(session: Session) -> tuple:
-    """A cheap fingerprint that changes whenever records or sources change."""
+    """A cheap fingerprint that changes whenever records, sources or sheet roles change."""
     records = session.execute(
         select(func.count(Record.id), func.max(Record.id), func.max(Record.updated_at))
     ).one()
     sources = session.execute(select(func.count(DataSource.id), func.max(DataSource.updated_at))).one()
-    return (*records, *sources)
+    sheets = session.execute(
+        select(func.count(SourceSheetConfig.id), func.max(SourceSheetConfig.updated_at))
+    ).one()
+    return (*records, *sources, *sheets)
 
 
 def cached_for_records[T](session: Session, name: str, compute: Callable[[], T]) -> T:

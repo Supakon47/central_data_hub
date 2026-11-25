@@ -31,6 +31,12 @@ def location_match_report(session: SessionDep) -> dict:
     return locations.match_report(session)
 
 
+@router.get("/api/location-conflicts")
+def list_location_conflicts(session: SessionDep, limit: int = Query(default=100, ge=1, le=500)) -> dict:
+    """Registration numbers recorded at more than one different storage location."""
+    return locations.location_conflicts(session, limit)
+
+
 @router.get("/api/location-match-reviews")
 def list_location_match_reviews(session: SessionDep, limit: int = Query(default=200, ge=1, le=1000)) -> dict:
     """Staff decisions already recorded, newest first."""

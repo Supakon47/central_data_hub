@@ -273,6 +273,31 @@ docker compose run --rm --no-deps -v "${backend}:/app/backend" -w /app/backend w
 docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > data\backups\central_data_hub-before-change.dump
 ```
 
+## ระบบทดลองนำเข้า (trial)
+
+ใช้ทดสอบการนำเข้าไฟล์ Excel ชุดใหม่ก่อนนำเข้าระบบหลัก มีฐานข้อมูลของตัวเอง (`central_data_hub_trial`) และโฟลเดอร์ภาพแยก (`data/trial-images`) เปิดที่ [http://localhost:8001](http://localhost:8001) ข้อมูลในระบบหลักไม่ถูกแตะ
+
+ครั้งแรกให้สร้างฐานข้อมูลทดลองก่อน:
+
+```powershell
+docker compose exec db createdb -U central_data_hub central_data_hub_trial
+```
+
+เปิดระบบทดลอง (อ่านไฟล์ Excel จากโฟลเดอร์ `..\RawData` แบบอ่านอย่างเดียว เปลี่ยนได้ด้วย `RAWDATA_DIR` ใน `.env`):
+
+```powershell
+docker compose --profile trial up -d --build web-trial
+```
+
+นำเข้าด้วย import profile (รายละเอียดรูปแบบอยู่ใน [backend/import_profiles/README.md](backend/import_profiles/README.md)):
+
+```powershell
+docker compose --profile trial run --rm web-trial python -m app.import_profile backend/import_profiles --dry-run
+docker compose --profile trial run --rm web-trial python -m app.import_profile backend/import_profiles
+```
+
+ล้างฐานทดลองเพื่อเริ่มใหม่: ลบแล้วสร้างใหม่ด้วย `dropdb`/`createdb` ระบบจะสร้างตารางเองตอนเปิด `web-trial`
+
 ## การจัดการข้อมูลและข้อจำกัด
 
 - Import ปัจจุบันรองรับไฟล์ `.xlsx`

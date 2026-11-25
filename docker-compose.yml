@@ -40,5 +40,30 @@ services:
     volumes:
       - ./data:/app/data
 
+  # Trial copy for testing imports: its own database and image folder, the main
+  # data is never touched. Start with: docker compose --profile trial up -d web-trial
+  # (create the database once first; see README "ระบบทดลองนำเข้า").
+  web-trial:
+    profiles: ["trial"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://central_data_hub:change-this-before-use@db:5432/central_data_hub_trial
+      APP_ENV: development
+      IMAGE_STORAGE_DIR: /app/data/trial-images
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-}
+      ADMIN_SESSION_TTL_SECONDS: ${ADMIN_SESSION_TTL_SECONDS:-28800}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data:/app/data
+      # Source workbooks, read-only. Override the folder with RAWDATA_DIR in .env.
+      - ${RAWDATA_DIR:-../RawData}:/rawdata:ro
+
 volumes:
   postgres_data:

@@ -5,6 +5,8 @@ from urllib.parse import parse_qs, urlparse
 GOOGLE_SHEETS_IMAGE_FORMULA = re.compile(
     r'^\s*=\s*IMAGE\s*\(\s*"((?:[^"]|"")*)"', re.IGNORECASE
 )
+# Raw-data key holding a location taken from the sheet name (set by import profiles).
+SHEET_LOCATION_KEY = "_sheet_location"
 THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
 REGISTRATION_PLACEHOLDERS = {"", "-", "ไม่มี", "ไม่พบ", "ไม่ระบุ", "ชิ้นส่วน"}
 # Storage-room workbooks write "no number" in many forms, often with a running

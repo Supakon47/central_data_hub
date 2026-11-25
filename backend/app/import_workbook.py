@@ -16,7 +16,13 @@ from .database import SessionLocal
 from .db_upgrade import upgrade_database
 from .embedded_images import extract_embedded_images
 from .models import DataQualityIssue, DataSource, Record, SyncRun
-from .normalization import clean_multiline_text, clean_text, normalise_header, normalise_image_url
+from .normalization import (
+    SHEET_LOCATION_KEY,
+    clean_multiline_text,
+    clean_text,
+    normalise_header,
+    normalise_image_url,
+)
 
 FIELD_ALIASES = {
     "registration_no": ("เลขทะเบียน", "ทะเบียน", "เลขวัตถุ", "เลขประจำวัตถุ", "."),
@@ -46,6 +52,9 @@ class TabularSheet:
 
     `rows` includes the header as its first row.  This keeps Excel and Google
     Sheets on the same validation and idempotent-import path.
+
+    The optional rules below are used by import profiles; with their defaults
+    a sheet is imported exactly as before.
     """
 
     name: str
@@ -54,6 +63,27 @@ class TabularSheet:
     source_url: str | None = None
     embedded_image_urls_by_row: dict[int, str] = field(default_factory=dict)
     duplicate_embedded_image_rows: set[int] = field(default_factory=set)
+    # Skip rows with neither a registration number nor a name (e.g. a column of
+    # running numbers filled far below the data), and total rows.
+    skip_unidentified_rows: bool = False
+    # Stop reading after this many empty rows in a row (formatting that runs to
+    # the last row of the sheet). None reads every row.
+    max_consecutive_blank_rows: int | None = None
+    # Location for rows that have none, when the sheet itself is a place
+    # (e.g. a sheet named "นอกชั้น").
+    default_location: str | None = None
+
+
+# Rows whose registration cell starts with one of these are totals, not objects.
+SUMMARY_ROW_PREFIXES = ("จำนวน", "รวม")
+
+
+def row_is_unidentified(payload: dict) -> bool:
+    return not payload["registration_no"] and not payload["title_description"]
+
+
+def row_is_summary(payload: dict) -> bool:
+    return bool(payload["registration_no"]) and payload["registration_no"].startswith(SUMMARY_ROW_PREFIXES)
 
 
 def first_value(row: list[object], indexes: dict[str, int], aliases: tuple[str, ...], multiline: bool = False):
@@ -122,6 +152,7 @@ def sync_tabular_sheets(
     session.flush()
     known_aliases = {alias for aliases in FIELD_ALIASES.values() for alias in aliases}
     removed_count = 0
+    sheet_reports = []
 
     for sheet in sheets:
         rows = iter(sheet.rows)
@@ -138,16 +169,35 @@ def sync_tabular_sheets(
                 code="UNRECOGNISED_HEADERS",
                 message="ไม่พบหัวตารางที่ระบบรู้จัก จึงข้ามชีตนี้",
             ))
+            sheet_reports.append({"sheet": sheet.name, "status": "unrecognised_headers"})
             continue
 
         indexes = {header: index for index, header in enumerate(headers) if header}
         observed_row_keys: set[str] = set()
         seen_stable_ids: set[str] = set()
         identity_error = False
+        before = (run.rows_read, run.rows_inserted, run.rows_updated, run.rows_skipped, run.error_count)
+        report = {"sheet": sheet.name, "status": "imported", "unidentified_rows": 0, "summary_rows": 0,
+                  "last_row": sheet.header_row_number, "stopped_early": False}
+        blank_streak = 0
         for row_number, values in enumerate(rows, start=sheet.header_row_number + 1):
             row = list(values)
             if not any(value not in (None, "") for value in row):
+                blank_streak += 1
+                if sheet.max_consecutive_blank_rows and blank_streak >= sheet.max_consecutive_blank_rows:
+                    report["stopped_early"] = True
+                    break
                 continue
+            blank_streak = 0
+            report["last_row"] = row_number
+            if sheet.skip_unidentified_rows:
+                payload, _ = canonical_payload(row, headers)
+                if row_is_unidentified(payload):
+                    report["unidentified_rows"] += 1
+                    continue
+                if row_is_summary(payload):
+                    report["summary_rows"] += 1
+                    continue
             run.rows_read += 1
             row_key, stable_id = stable_row_key(row, indexes, row_number)
             if stable_id and stable_id in seen_stable_ids:
@@ -165,6 +215,8 @@ def sync_tabular_sheets(
             if stable_id:
                 seen_stable_ids.add(stable_id)
             payload, raw_data = canonical_payload(row, headers)
+            if sheet.default_location:
+                raw_data[SHEET_LOCATION_KEY] = sheet.default_location
             embedded_image_url = sheet.embedded_image_urls_by_row.get(row_number)
             if embedded_image_url:
                 payload["image_url"] = embedded_image_url
@@ -262,6 +314,12 @@ def sync_tabular_sheets(
                     message="พบรูปภาพฝังมากกว่า 1 รูปในช่องรูปภาพ จึงไม่จับคู่รูปอัตโนมัติ",
                 ))
 
+        after = (run.rows_read, run.rows_inserted, run.rows_updated, run.rows_skipped, run.error_count)
+        for name, start, end in zip(("rows_read", "inserted", "updated", "unchanged", "issues"), before, after,
+                                    strict=True):
+            report[name] = end - start
+        sheet_reports.append(report)
+
         # A duplicate record_id makes it ambiguous which original record was
         # removed. Keep the previous central copy intact until staff fix the
         # conflicting IDs in the source sheet.
@@ -297,6 +355,7 @@ def sync_tabular_sheets(
         "skipped": run.rows_skipped,
         "deleted": removed_count,
         "errors": run.error_count,
+        "sheets": sheet_reports,
     }
 
 

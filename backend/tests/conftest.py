@@ -36,9 +36,12 @@ os.environ.update({
     "GOOGLE_SHEETS_AUTO_SYNC_ENABLED": "false",
 })
 
+from alembic import command  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 
 from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.db_upgrade import alembic_config  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services import cache  # noqa: E402
 
@@ -47,8 +50,14 @@ assert engine.url.get_backend_name() == "sqlite", "tests must never run against 
 
 @pytest.fixture(autouse=True)
 def empty_database():
+    # Build the tables straight from the models (fast) and mark the database as
+    # fully migrated, so app startup does not try to migrate it again.
+    # tests/test_migrations.py checks that the migrations build the same schema.
     Base.metadata.drop_all(bind=engine)
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
     Base.metadata.create_all(bind=engine)
+    command.stamp(alembic_config(), "head")
     cache._RESULT_CACHE.clear()
     yield
 

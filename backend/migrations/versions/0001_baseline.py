@@ -29,7 +29,7 @@ def upgrade() -> None:
     sa.Column('actor', sa.String(length=100), nullable=False),
     sa.Column('before_data', sa.JSON(), nullable=True),
     sa.Column('after_data', sa.JSON(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_audit_logs_action'), 'audit_logs', ['action'], unique=False)
@@ -45,8 +45,8 @@ def upgrade() -> None:
     sa.Column('classification', sa.String(length=50), nullable=False),
     sa.Column('sync_frequency_minutes', sa.Integer(), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_data_sources_name'), 'data_sources', ['name'], unique=True)
@@ -58,8 +58,8 @@ def upgrade() -> None:
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('last_synced_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('last_message', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.ForeignKeyConstraint(['source_id'], ['data_sources.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -85,8 +85,8 @@ def upgrade() -> None:
     sa.Column('status_antique', sa.String(length=100), nullable=True),
     sa.Column('status_storage', sa.String(length=100), nullable=True),
     sa.Column('raw_data', sa.JSON(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.ForeignKeyConstraint(['source_id'], ['data_sources.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('source_id', 'source_sheet', 'source_row_key', name='uq_record_source_row')
@@ -109,8 +109,8 @@ def upgrade() -> None:
     sa.Column('read_range', sa.String(length=255), nullable=False),
     sa.Column('header_row_number', sa.Integer(), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.ForeignKeyConstraint(['source_id'], ['data_sources.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('source_id', 'sheet_name', name='uq_source_sheet_config')
@@ -143,7 +143,7 @@ def upgrade() -> None:
     sa.Column('code', sa.String(length=100), nullable=False),
     sa.Column('message', sa.Text(), nullable=False),
     sa.Column('is_resolved', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.ForeignKeyConstraint(['record_id'], ['records.id'], ),
     sa.ForeignKeyConstraint(['source_id'], ['data_sources.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -158,7 +158,7 @@ def upgrade() -> None:
     sa.Column('decision', sa.String(length=20), nullable=False),
     sa.Column('note', sa.Text(), nullable=True),
     sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.ForeignKeyConstraint(['location_record_id'], ['records.id'], ),
     sa.ForeignKeyConstraint(['object_record_id'], ['records.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -179,8 +179,8 @@ def upgrade() -> None:
     sa.Column('remote_file_id', sa.String(length=512), nullable=True),
     sa.Column('source_sheet', sa.String(length=255), nullable=True),
     sa.Column('position', sa.Integer(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.ForeignKeyConstraint(['record_id'], ['records.id'], ),
     sa.ForeignKeyConstraint(['source_id'], ['data_sources.id'], ),
     sa.PrimaryKeyConstraint('id'),
