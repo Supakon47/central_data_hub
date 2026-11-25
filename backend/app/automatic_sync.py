@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal
 from .models import DataSource, SyncRun
 from .sync_google_image_bridge import sync_google_image_bridge
 from .sync_google_sheet import sync_google_source
@@ -114,7 +114,6 @@ def run_due_google_syncs() -> list[dict]:
     if not _RUN_LOCK.acquire(blocking=False):
         return [{"status": "skipped", "reason": "another automatic sync is already running"}]
     try:
-        Base.metadata.create_all(bind=engine)
         results = []
         for source_id, source_name, has_image_bridge in _due_sources():
             try:

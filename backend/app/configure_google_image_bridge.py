@@ -5,7 +5,8 @@ import json
 
 from sqlalchemy import select
 
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal
+from .db_upgrade import upgrade_database
 from .google_sheets import normalise_drive_folder_id
 from .models import DataSource, ImageBridgeConfig
 
@@ -15,7 +16,7 @@ def configure_google_image_bridge(
     drive_folder_id: str,
     manifest_file_name: str = "central-data-hub-images.json",
 ) -> dict:
-    Base.metadata.create_all(bind=engine)
+    upgrade_database()
     session = SessionLocal()
     try:
         source = session.scalar(select(DataSource).where(DataSource.name == source_name))

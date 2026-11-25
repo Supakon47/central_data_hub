@@ -7,7 +7,8 @@ import json
 
 from sqlalchemy import select
 
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal
+from .db_upgrade import upgrade_database
 from .google_sheets import _credential_info, google_drive_read_service
 from .models import DataSource, ImageBridgeConfig
 
@@ -17,7 +18,7 @@ def inspect_google_image_bridge(source_name: str) -> dict:
 
     This does not create, modify, download, or delete any Google Drive files.
     """
-    Base.metadata.create_all(bind=engine)
+    upgrade_database()
     session = SessionLocal()
     try:
         source = session.scalar(select(DataSource).where(DataSource.name == source_name))

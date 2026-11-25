@@ -18,7 +18,8 @@ import openpyxl
 from sqlalchemy import or_, select
 
 from .config import IMAGE_STORAGE_DIR
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal
+from .db_upgrade import upgrade_database
 from .embedded_images import extract_embedded_images
 from .google_sheets import (
     GoogleSheetsConfigurationError,
@@ -196,7 +197,7 @@ def _export_sheet_images(
 
 def sync_google_image_bridge(source_name: str, dry_run: bool = False) -> dict:
     """Synchronise central image copies without exporting a whole spreadsheet."""
-    Base.metadata.create_all(bind=engine)
+    upgrade_database()
     session = SessionLocal()
     try:
         source = session.scalar(select(DataSource).where(DataSource.name == source_name))

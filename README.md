@@ -254,6 +254,25 @@ python scripts\api_snapshot.py record $env:TEMP\api-before
 python scripts\api_snapshot.py compare $env:TEMP\api-before
 ```
 
+## โครงสร้างฐานข้อมูล (migration)
+
+ระบบใช้ Alembic (`backend/migrations/`) และอัปเดตโครงสร้างตารางเองทุกครั้งที่ web container เริ่มทำงาน ฐานข้อมูลที่สร้างก่อนมี migration จะถูกบันทึกว่าอยู่ที่รุ่น `0001_baseline` โดยไม่สร้างตารางซ้ำ
+
+เมื่อแก้ `backend/app/models.py` ให้สร้าง migration ใหม่ ตรวจไฟล์ที่ได้ แล้ว commit คู่กับการแก้ model:
+
+```powershell
+$backend = (Resolve-Path backend).Path
+docker compose run --rm --no-deps -v "${backend}:/app/backend" -w /app/backend web alembic revision --autogenerate -m "อธิบายการเปลี่ยนแปลง"
+```
+
+อัปเดตฐานข้อมูลด้วยมือ (ปกติไม่ต้อง เพราะทำตอนเริ่มระบบ): `docker compose exec web python -m app.db_upgrade`
+
+ก่อนเปลี่ยนโครงสร้างฐานข้อมูลจริง ให้ backup ก่อนเสมอ:
+
+```powershell
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > data\backups\central_data_hub-before-change.dump
+```
+
 ## การจัดการข้อมูลและข้อจำกัด
 
 - Import ปัจจุบันรองรับไฟล์ `.xlsx`

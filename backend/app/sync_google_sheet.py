@@ -9,7 +9,8 @@ from tempfile import TemporaryDirectory
 from sqlalchemy import select
 
 from .config import IMAGE_STORAGE_DIR
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal
+from .db_upgrade import upgrade_database
 from .embedded_images import extract_embedded_images
 from .google_sheets import GoogleSheetsConfigurationError, GoogleSheetSource, export_workbook_as_xlsx, fetch_values
 from .import_workbook import FIELD_ALIASES, STABLE_ROW_ID_ALIASES, TabularSheet, sync_tabular_sheets
@@ -112,7 +113,7 @@ def _preview(sheets: list[TabularSheet]) -> dict:
 
 
 def sync_google_source(source_name: str, dry_run: bool = False) -> dict:
-    Base.metadata.create_all(bind=engine)
+    upgrade_database()
     session = SessionLocal()
     try:
         source = session.scalar(select(DataSource).where(DataSource.name == source_name))

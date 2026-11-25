@@ -12,7 +12,8 @@ import openpyxl
 from sqlalchemy import select
 
 from .config import IMAGE_STORAGE_DIR
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal
+from .db_upgrade import upgrade_database
 from .embedded_images import extract_embedded_images
 from .models import DataQualityIssue, DataSource, Record, SyncRun
 from .normalization import clean_multiline_text, clean_text, normalise_header, normalise_image_url
@@ -300,7 +301,7 @@ def sync_tabular_sheets(
 
 
 def import_xlsx(path: str, source_name: str = "บัญชีเดินทุ่ง (ต้นแบบ)") -> dict:
-    Base.metadata.create_all(bind=engine)
+    upgrade_database()
     workbook_path = Path(path).resolve()
     if not workbook_path.is_file() or workbook_path.suffix.lower() != ".xlsx":
         raise ValueError("ระบุไฟล์ .xlsx ที่มีอยู่จริง")

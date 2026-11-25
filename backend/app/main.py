@@ -9,15 +9,15 @@ from fastapi.staticfiles import StaticFiles
 
 from .automatic_sync import automatic_sync_loop
 from .config import APP_NAME, AUTO_SYNC_POLL_SECONDS, FRONTEND_DIR, IMAGE_STORAGE_DIR
-from .database import Base, engine
+from .db_upgrade import upgrade_database
 from .routers import admin_auth, admin_records, admin_sources, dashboard, locations, quality, records, system
 from .services.google import automatic_sync_available
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Tables are created on start; there are no migrations yet.
-    Base.metadata.create_all(bind=engine)
+    # Bring the schema up to date (Alembic) before serving any request.
+    upgrade_database()
     task = None
     if automatic_sync_available():
         task = asyncio.create_task(automatic_sync_loop(AUTO_SYNC_POLL_SECONDS))

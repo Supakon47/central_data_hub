@@ -5,7 +5,8 @@ import json
 
 from sqlalchemy import select
 
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal
+from .db_upgrade import upgrade_database
 from .google_sheets import GoogleSheetSource, normalise_spreadsheet_id
 from .models import DataSource, SourceSheetConfig
 
@@ -29,7 +30,7 @@ def configure_google_sheet(
     if header_row_number != 1:
         raise ValueError("MVP ปัจจุบันรองรับหัวตารางที่แถวแรกของ range เท่านั้น (--header-row 1)")
 
-    Base.metadata.create_all(bind=engine)
+    upgrade_database()
     session = SessionLocal()
     try:
         source = session.scalar(select(DataSource).where(DataSource.name == source_name))
