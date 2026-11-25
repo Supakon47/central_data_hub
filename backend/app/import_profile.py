@@ -30,7 +30,7 @@ from .database import SessionLocal
 from .db_upgrade import upgrade_database
 from .embedded_images import extract_embedded_images
 from .import_workbook import TabularSheet, sync_tabular_sheets
-from .models import DataSource, SourceSheetConfig
+from .models import DataQualityIssue, DataSource, SourceSheetConfig
 from .normalization import normalise_header
 
 ROLES = ("register", "location")
@@ -188,6 +188,23 @@ def run_profile(profile: ImportProfile, rawdata_dir: Path, dry_run: bool) -> dic
         result = sync_tabular_sheets(
             session, source, sheets, f"Imported {workbook_path.name} with profile {profile.path.name}",
         )
+        for sheet_name, row_number, media_part in images.unreadable_media if images else []:
+            already_reported = session.scalar(select(DataQualityIssue.id).where(
+                DataQualityIssue.source_id == source.id,
+                DataQualityIssue.source_sheet == sheet_name,
+                DataQualityIssue.source_row_number == row_number,
+                DataQualityIssue.code == "UNREADABLE_EMBEDDED_IMAGE",
+            ))
+            if already_reported:
+                continue
+            session.add(DataQualityIssue(
+                source_id=source.id,
+                source_sheet=sheet_name,
+                source_row_number=row_number,
+                severity="warning",
+                code="UNREADABLE_EMBEDDED_IMAGE",
+                message=f"ภาพที่ฝังในไฟล์ Excel เสียหาย อ่านไม่ได้ ({media_part}) จึงไม่ได้นำภาพนี้เข้า",
+            ))
         roles = {plan.name: plan.role for plan in plans}
         for sheet_report in result["sheets"]:
             sheet_report["role"] = roles.get(sheet_report["sheet"])
@@ -200,6 +217,7 @@ def run_profile(profile: ImportProfile, rawdata_dir: Path, dry_run: bool) -> dic
             "profile": profile.path.name,
             "dry_run": dry_run,
             "embedded_images_exported": images.exported_count if images else None,
+            "unreadable_images": len(images.unreadable_media) if images else 0,
         })
         if dry_run:
             session.rollback()

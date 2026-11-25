@@ -2,6 +2,7 @@
 
 import xml.etree.ElementTree as ElementTree
 import zipfile
+import zlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -27,6 +28,8 @@ class EmbeddedImageResult:
     duplicate_rows_by_sheet: dict[str, set[int]] = field(default_factory=dict)
     exported_count: int = 0
     ignored_count: int = 0
+    # Media parts that cannot be read from the workbook (damaged inside the file).
+    unreadable_media: list[tuple[str, int, str]] = field(default_factory=list)  # (sheet, row, part)
 
 
 def _entry_xml(archive: zipfile.ZipFile, name: str) -> ElementTree.Element | None:
@@ -217,8 +220,14 @@ def extract_embedded_images(
             sheet_key = sha256(sheet_name.encode("utf-8")).hexdigest()[:16]
             relative_path = Path(source_key) / sheet_key / f"row-{row_number}{suffix}"
             output_path = output_root / relative_path
+            try:
+                content = archive.read(media_part)
+            except (zipfile.BadZipFile, zlib.error, EOFError):
+                # One damaged picture must not stop the rest of the workbook.
+                result.unreadable_media.append((sheet_name, row_number, media_part))
+                continue
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(archive.read(media_part))
+            output_path.write_bytes(content)
             result.urls_by_sheet_row[sheet_name][row_number] = "/media/" + quote(relative_path.as_posix())
             result.exported_count += 1
 
