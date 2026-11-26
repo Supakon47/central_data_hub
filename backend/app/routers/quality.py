@@ -1,12 +1,14 @@
-"""Data-quality issues found during import or sync."""
+"""Data-quality issues found during import or sync, and reports on missing data."""
 
-from fastapi import APIRouter, HTTPException, Query
+from datetime import date
+
+from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import func, select
 
 from ..dependencies import AdminDep, SessionDep
 from ..models import DataQualityIssue, DataSource, Record
 from ..schemas import DataQualityIssueResolution
-from ..services import completeness
+from ..services import completeness, report_export
 from ..services.audit import add_audit
 from ..services.cache import cached_for_records
 
@@ -17,6 +19,20 @@ router = APIRouter(tags=["data quality"])
 def data_completeness(session: SessionDep) -> dict:
     """Filled-field counts per source and sheet, to see what the source files are missing."""
     return cached_for_records(session, "data_completeness", lambda: completeness.data_completeness(session))
+
+
+@router.get("/api/admin/reports/data-request.xlsx")
+def data_request_report(session: SessionDep, _: AdminDep) -> Response:
+    """Excel workbook of missing data, unmatched and conflicting rows, for data owners.
+
+    Admin-only because it is a bulk export of storage locations.
+    """
+    filename = f"data-hub-data-request-{date.today().isoformat()}.xlsx"
+    return Response(
+        content=report_export.build_data_request_workbook(session),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/api/data-quality/issues")

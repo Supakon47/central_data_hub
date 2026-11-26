@@ -78,6 +78,16 @@
   gap: 7px;
   min-width: 152px;
 }
+.quality-actions {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  max-width: 360px;
+  text-align: right;
+}
+.quality-actions[hidden] {
+  display: none;
+}
 .completeness-table {
   min-width: 980px;
 }

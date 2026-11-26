@@ -376,6 +376,8 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     panels.forEach((name) => freshPanels.add(name));
     const session = await fetchAdminSession();
     isAdmin = Boolean(session.authenticated);
+    // The report is a bulk export of storage locations, so only administrators get it.
+    $("#data-request-actions").hidden = !isAdmin;
     const ignore = () => {};
     await Promise.all([
       ...panels.map(runPanel),
@@ -429,6 +431,10 @@ export function createQualityController({ bindRecordLinks, loadAudit, loadCatalo
     $("#quality-filter-form").addEventListener("submit", (event) => {
       event.preventDefault();
       loadPanel("issues");
+    });
+    $("#data-request-download").addEventListener("click", () => {
+      // The browser downloads the file; building it takes a few seconds on the full data.
+      window.location.href = "/api/admin/reports/data-request.xlsx";
     });
   }
 
